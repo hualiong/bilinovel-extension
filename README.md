@@ -6,7 +6,7 @@
 ## 用法
 **使用仓库更新地址**
 
-`https://raw.githubusercontent.com/hualiong/bilinovel-extension/repo/index.min.json`
+`https://raw.githubusercontent.com/hualiong/bilinovel-extension/main/index.min.json`
 
 若无法成功，请去 [Releases](https://github.com/hualiong/bilinovel-extension/releases) 下载 APK 安装
 
