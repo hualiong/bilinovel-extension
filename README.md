@@ -1,0 +1,19 @@
+## 说明 
+这是一个适用于 mihon 的，用于阅读**轻小说**插件，使用 `TextInterceptor` 将文本转成图片显示
+
+***因为一页的文本量较大，强烈建议使用使用“条漫”模式观看***
+
+## 用法
+**使用仓库更新地址**
+
+`https://raw.githubusercontent.com/hualiong/bilinovel-extension/repo/index.min.json`
+
+若无法成功，请去 [Releases](https://github.com/hualiong/bilinovel-extension/releases) 下载 APK 安装
+
+## 更新日志
+
+### [v1.4.1] - 2025-08-14
+- 支持查看搜索，热门，最近更新
+- 支持阅读小说（暂不支持查看插图，后续更新或许会支持）
+- 支持在设置里切换“热门”一栏要显示的内容（可选择各种排行榜）
+- 添加限流设置（10秒内仅限10个请求，尽量不要频繁用下载功能，容易失败，对源站也有压力）
