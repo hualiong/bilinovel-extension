@@ -1,14 +1,24 @@
 ## 说明 
-这是一个适用于 mihon 的，用于阅读**轻小说**插件，使用 `TextInterceptor` 将文本转成图片显示
+
+这是一个适用于 Mihon/Tachiyomi 及其分支，用于阅读**哔哩轻小说**的插件，使用 `TextInterceptor` 将文本转成图片显示
 
 ***因为一页的文本量较大，强烈建议使用使用“条漫”模式观看***
 
 ## 用法
+
 **使用仓库更新地址**
 
-`https://raw.githubusercontent.com/hualiong/bilinovel-extension/main/index.min.json`
+```
+https://raw.githubusercontent.com/hualiong/bilinovel-extension/main/index.min.json
+```
 
 若无法成功，请去 [Releases](https://github.com/hualiong/bilinovel-extension/releases) 下载 APK 安装
+
+## 截图
+<div style="display: flex; justify-content: space-evenly;">
+  <img src="screen/1.png" width="45%"/>
+  <img src="screen/2.png" width="45%"/>
+</div>
 
 ## 更新日志
 
