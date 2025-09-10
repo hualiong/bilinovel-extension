@@ -22,6 +22,10 @@ https://raw.githubusercontent.com/hualiong/bilinovel-extension/main/index.min.js
 
 ## 更新日志
 
+### [1.4.6] - 2025-09-11
+- 添加深色模式设置，可一键切换阅读页面颜色样式
+- 设置中修改颜色样式时，添加额外提示
+
 ### [1.4.5] - 2025-08-29
 - 更新密钥
 
