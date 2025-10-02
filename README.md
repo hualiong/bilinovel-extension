@@ -22,6 +22,9 @@ https://raw.githubusercontent.com/hualiong/bilinovel-extension/main/index.min.js
 
 ## 更新日志
 
+### [1.4.8] - 2025-10-02
+- 尝试修复小说乱序
+
 ### [1.4.7] - 2025-09-19
 - 添加繁体显示开关
 - 添加自定义字号大小设置
