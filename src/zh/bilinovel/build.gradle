@@ -1,0 +1,8 @@
+ext {
+    extName = 'BiliNovel'
+    extClass = '.BiliNovel'
+    extVersionCode = 9
+    isNsfw = false
+}
+
+apply from: "$rootDir/common.gradle"
