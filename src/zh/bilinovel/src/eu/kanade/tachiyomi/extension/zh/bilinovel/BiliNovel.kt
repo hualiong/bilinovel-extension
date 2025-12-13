@@ -398,8 +398,8 @@ class BiliNovel : HttpSource(), ConfigurableSource {
     }
 
     private fun getChapterUrlByContext(i: Int, els: Elements) = when (i) {
-        0 -> "${els[1].attr("href")}#prev"
-        else -> "${els[i - 1].attr("href")}#next"
+        els.lastIndex -> "${els[i - 1].attr("href").replace(".html", "_66.html")}#next"
+        else -> "${els[i + 1].attr("href")}#prev"
     }
 
     private fun sort(content: Element, chapterId: Int): String {
@@ -564,7 +564,12 @@ class BiliNovel : HttpSource(), ConfigurableSource {
     // Manga View Page
 
     override fun pageListRequest(chapter: SChapter) =
-        GET(baseUrl + chapter.url.replace(".", "_2."), headers)
+        GET(
+            baseUrl + chapter.url.let {
+                if (it.contains("#")) it else it.replace(".", "_2.")
+            },
+            headers,
+        )
 
     override fun pageListParse(response: Response) = response.asJsoup().let { doc ->
         doc.selectFirst("#acontent > .center-note")?.run { throw Exception(text()) }

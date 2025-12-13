@@ -34,7 +34,7 @@ class NovelInterceptor : Interceptor {
 
     private fun checkPC(response: Response) {
         if (response.isRedirect && response.header("Location")?.indexOf("linovelib") != -1) {
-            throw Exception("不支持电脑端查看，请在“更多-设置-高级”中更换手机端UA标识")
+            throw Exception("不支持PC端查看，请在“更多-设置-高级”中更换移动端UA标识")
         }
     }
 
