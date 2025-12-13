@@ -26,6 +26,9 @@ https://raw.githubusercontent.com/hualiong/bilinovel-extension/main/index.min.js
 
 ## 更新日志
 
+### [1.4.10] - 2025-12-13
+- 修复一些章节会显示其它章节内容的Bug
+
 ### [1.4.9] - 2025-11-26
 - 修复一些Bug
 
