@@ -297,6 +297,17 @@ class BiliNovel : HttpSource(), ConfigurableSource {
         }
     }
 
+    private fun Elements.mapToChapter(switch: Boolean, date: Long, chapterBar: String? = null) =
+        mapIndexed { i, element ->
+            val url = element.absUrl("href").takeUnless("javascript:cid(1)"::equals)
+            SChapter.create().apply {
+                name = element.text().toHalfWidthDigits().convert(switch)
+                date_upload = date
+                chapterBar?.let { scanlator = it.convert(switch) }
+                setUrlWithoutDomain(url ?: getChapterUrlByContext(i, this@mapToChapter))
+            }
+        }
+
     private fun parseSalt(url: String) {
         var s1 = 0
         var s2 = 0
@@ -542,34 +553,24 @@ class BiliNovel : HttpSource(), ConfigurableSource {
     override fun chapterListRequest(manga: SManga) =
         GET("$baseUrl/novel/${manga.id}/catalog", headers)
 
-    override fun chapterListParse(response: Response) = response.asJsoup().let {
+    override fun chapterListParse(response: Response) = response.asJsoup().let { resp ->
         val switch = pref.getBoolean(PREF_DISPLAY_TRADITIONAL, false)
-        val info = it.selectFirst(".chapter-sub-title")!!.text()
+        val info = resp.selectFirst(".chapter-sub-title")!!.text()
         val date = DATE_FORMAT.tryParse(DATE_REGEX.find(info)?.value)
-        it.select(".catalog-volume").flatMap { v ->
-            val chapterBar = v.selectFirst(".chapter-bar")!!.text().toHalfWidthDigits()
-            val chapters = v.select(".chapter-li-a")
-            chapters.mapIndexed { i, e ->
-                val url = e.absUrl("href").takeUnless("javascript:cid(1)"::equals)
-                SChapter.create().apply {
-                    name = e.text().toHalfWidthDigits().convert(switch)
-                    date_upload = date
-                    scanlator = chapterBar.convert(switch)
-                    setUrlWithoutDomain(url ?: getChapterUrlByContext(i, chapters))
-                }
-            }
-        }.reversed()
-    }
+        resp.select(".catalog-volume").takeIf(Elements::isNotEmpty)?.flatMap {
+            val chapterBar = it.selectFirst(".chapter-bar")!!.text().toHalfWidthDigits()
+            it.select(".chapter-li-a").mapToChapter(switch, date, chapterBar)
+        } ?: resp.select(".chapter-li-a").mapToChapter(switch, date)
+    }.reversed()
 
     // Manga View Page
 
-    override fun pageListRequest(chapter: SChapter) =
-        GET(
-            baseUrl + chapter.url.let {
-                if (it.contains("#")) it else it.replace(".", "_2.")
-            },
-            headers,
-        )
+    override fun pageListRequest(chapter: SChapter) = GET(
+        url = baseUrl + chapter.url.let {
+            if (it.contains("#")) it else it.replace(".", "_2.")
+        },
+        headers = headers,
+    )
 
     override fun pageListParse(response: Response) = response.asJsoup().let { doc ->
         doc.selectFirst("#acontent > .center-note")?.run { throw Exception(text()) }
