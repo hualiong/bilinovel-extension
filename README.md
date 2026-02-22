@@ -2,11 +2,11 @@
 
 这是一个适用于 Mihon/Tachiyomi 及其分支，用于阅读**哔哩轻小说**的插件，使用 `TextInterceptor` 将文本转成图片显示
 
-### 一些说明：
+### 一些提醒：
 
-- ***因为一页的文本量较大，强烈建议使用“条漫”模式观看***
+- *因为一页的文本量较大，强烈建议使用“**条漫**”模式观看*
 
-- ***尽量不要改 mihon 的默认UA标识，要改也要用移动端标识，否则插件将连接到 [PC 端网站](https://www.linovelib.com)，导致无法正常获取***
+- *尽量不要改 mihon 的默认UA标识，要改也要用移动端标识，否则插件将连接到 [PC 端网站](https://www.linovelib.com)，无法正常获取内容*
 
 ## 用法
 
@@ -25,6 +25,9 @@ https://raw.githubusercontent.com/hualiong/bilinovel-extension/main/index.min.js
 </div>
 
 ## 更新日志
+
+### [1.4.12] - 2026-02-22
+- 添加自定义限流设置
 
 ### [1.4.11] - 2025-12-22
 - 修复一些小说没有分卷导致获取不到章节的Bug
