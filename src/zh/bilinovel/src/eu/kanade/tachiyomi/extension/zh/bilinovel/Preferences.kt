@@ -15,9 +15,11 @@ const val PREF_HEADING_FONT_SIZE = "HEADING_FONT_SIZE"
 const val PREF_BODY_FONT_SIZE = "BODY_FONT_SIZE"
 const val PREF_DISPLAY_TRADITIONAL = "DISPLAY_TRADITIONAL"
 const val PREF_DARK_MODE = "DARK_MODE"
+const val PREF_RATE_LIMIT = "RATE_LIMIT"
 
 val RGB_REGEX = Regex("^#[0-9A-F]{6}$", RegexOption.IGNORE_CASE)
 val FONT_SIZE_REGEX = Regex("^(?:\\d+|\\d+\\.\\d+)$")
+val RATE_LIMIT_REGEX = Regex("^\\d+/\\d+$")
 
 fun preferencesInternal(context: Context, pref: SharedPreferences): Array<Preference> {
     return arrayOf(
@@ -62,7 +64,8 @@ fun preferencesInternal(context: Context, pref: SharedPreferences): Array<Prefer
             setOnPreferenceChangeListener { _, newValue ->
                 if (RGB_REGEX.matches(newValue as String)) {
                     summary = newValue
-                    Toast.makeText(context, "已加载章节需清除章节缓存后生效", Toast.LENGTH_LONG).show()
+                    Toast.makeText(context, "已加载章节需清除章节缓存后生效", Toast.LENGTH_LONG)
+                        .show()
                     true
                 } else {
                     Toast.makeText(
@@ -83,7 +86,8 @@ fun preferencesInternal(context: Context, pref: SharedPreferences): Array<Prefer
             setOnPreferenceChangeListener { _, newValue ->
                 if (RGB_REGEX.matches(newValue as String)) {
                     summary = newValue
-                    Toast.makeText(context, "已加载章节需清除章节缓存后生效", Toast.LENGTH_LONG).show()
+                    Toast.makeText(context, "已加载章节需清除章节缓存后生效", Toast.LENGTH_LONG)
+                        .show()
                     true
                 } else {
                     Toast.makeText(
@@ -104,7 +108,8 @@ fun preferencesInternal(context: Context, pref: SharedPreferences): Array<Prefer
             setOnPreferenceChangeListener { _, newValue ->
                 if (FONT_SIZE_REGEX.matches(newValue as String)) {
                     summary = newValue
-                    Toast.makeText(context, "已加载章节需清除章节缓存后生效", Toast.LENGTH_LONG).show()
+                    Toast.makeText(context, "已加载章节需清除章节缓存后生效", Toast.LENGTH_LONG)
+                        .show()
                     true
                 } else {
                     Toast.makeText(context, "非法字号！请检查输入格式", Toast.LENGTH_LONG).show()
@@ -121,7 +126,8 @@ fun preferencesInternal(context: Context, pref: SharedPreferences): Array<Prefer
             setOnPreferenceChangeListener { _, newValue ->
                 if (FONT_SIZE_REGEX.matches(newValue as String)) {
                     summary = newValue
-                    Toast.makeText(context, "已加载章节需清除章节缓存后生效", Toast.LENGTH_LONG).show()
+                    Toast.makeText(context, "已加载章节需清除章节缓存后生效", Toast.LENGTH_LONG)
+                        .show()
                     true
                 } else {
                     Toast.makeText(context, "非法字号！请检查输入格式", Toast.LENGTH_LONG).show()
@@ -129,9 +135,29 @@ fun preferencesInternal(context: Context, pref: SharedPreferences): Array<Prefer
                 }
             }
         },
+        EditTextPreference(context).apply {
+            key = PREF_RATE_LIMIT
+            title = "请求速率限制"
+            summary = pref.getString(key, "10/10")!!.split("/")
+                .let { "每 ${it[1]} 秒内允许 ${it[0]} 个请求通过" }
+            dialogMessage = "按照 */* 的格式输入，10/2 则代表每 2 秒内允许 10 个请求通过，默认为 10/10"
+            setDefaultValue("10/10")
+            setOnPreferenceChangeListener { _, newValue ->
+                if (RATE_LIMIT_REGEX.matches(newValue as String)) {
+                    val split = newValue.split("/")
+                    summary = "每 ${split[1]} 秒内允许 ${split[0]} 个请求通过"
+                    Toast.makeText(context, "重启应用后生效", Toast.LENGTH_LONG).show()
+                    true
+                } else {
+                    Toast.makeText(context, "格式错误！请检查输入", Toast.LENGTH_LONG).show()
+                    false
+                }
+            }
+        },
         SwitchPreferenceCompat(context).apply {
-            key = PREF_DISPLAY_TRADITIONAL
-            title = "显示繁体"
+            key = PREF_DARK_MODE
+            title = "深色模式"
+            summary = "开启后，阅读页面的样式将强制使用黑底白字"
             setDefaultValue(false)
             setOnPreferenceChangeListener { _, _ ->
                 Toast.makeText(context, "已加载章节需清除章节缓存后生效", Toast.LENGTH_LONG).show()
@@ -139,9 +165,8 @@ fun preferencesInternal(context: Context, pref: SharedPreferences): Array<Prefer
             }
         },
         SwitchPreferenceCompat(context).apply {
-            key = PREF_DARK_MODE
-            title = "深色模式"
-            summary = "开启后，阅读页面的样式将强制使用黑底白字"
+            key = PREF_DISPLAY_TRADITIONAL
+            title = "显示繁体"
             setDefaultValue(false)
             setOnPreferenceChangeListener { _, _ ->
                 Toast.makeText(context, "已加载章节需清除章节缓存后生效", Toast.LENGTH_LONG).show()

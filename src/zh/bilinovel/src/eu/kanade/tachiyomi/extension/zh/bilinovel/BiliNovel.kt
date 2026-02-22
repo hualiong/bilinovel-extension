@@ -32,18 +32,20 @@ class BiliNovel : HttpSource(), ConfigurableSource {
 
     private val pref by getPreferencesLazy()
 
+    override fun setupPreferenceScreen(screen: PreferenceScreen) {
+        preferencesInternal(screen.context, pref).forEach(screen::addPreference)
+    }
+
     override val client = super.client.newBuilder()
-        .addInterceptor(HtmlInterceptor(baseUrl, pref))
-        .rateLimit(10, 10).addNetworkInterceptor(NovelInterceptor()).build()
+        .addInterceptor(HtmlInterceptor(baseUrl, pref)).also {
+            val split = pref.getString(PREF_RATE_LIMIT, "10/10")!!.split("/")
+            it.rateLimit(split[0].toInt(), split[1].toLong())
+        }.addNetworkInterceptor(NovelInterceptor()).build()
 
     override fun headersBuilder() = super.headersBuilder()
         .add("Referer", "$baseUrl/")
         .add("Accept-Language", "zh")
         .add("Accept", "*/*")
-
-    override fun setupPreferenceScreen(screen: PreferenceScreen) {
-        preferencesInternal(screen.context, pref).forEach(screen::addPreference)
-    }
 
     // Customize
 
