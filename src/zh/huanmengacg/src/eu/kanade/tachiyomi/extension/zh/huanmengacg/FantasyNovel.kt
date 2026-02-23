@@ -133,7 +133,7 @@ class FantasyNovel : HttpSource(), ConfigurableSource {
             val text = e.text()
             SChapter.create().apply {
                 name = text.substringAfter(" ").trim()
-                scanlator = text.substringBefore(" ")
+                scanlator = text.indexOf(" ").takeIf { it > 0 }?.let(text::take)
                 date_upload = date
                 setUrlWithoutDomain(e.absUrl("href"))
             }
