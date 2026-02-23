@@ -98,9 +98,9 @@ fun preferencesInternal(context: Context, pref: SharedPreferences): Array<Prefer
         },
         EditTextPreference(context).apply {
             key = PREF_LINES_PER_PAGE
-            title = "正文每页行数"
+            title = "每页段落数"
             summary = pref.getString(key, "30")
-            dialogMessage = "行数越小，单张图片的缩放程度越小。如果你喜欢横向翻页方式，可以尝试调小行数，如：20（默认值：100）"
+            dialogMessage = "设置每页显示的最大段落数，而不是行数。如果喜欢横向翻页，可以尝试调小行数。默认为 100"
             setDefaultValue("100")
             setOnPreferenceChangeListener { _, newValue ->
                 if (NUM_REGEX.matches(newValue as String)) {
