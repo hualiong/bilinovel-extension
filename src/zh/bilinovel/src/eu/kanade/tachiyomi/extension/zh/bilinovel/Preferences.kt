@@ -8,17 +8,22 @@ import androidx.preference.ListPreference
 import androidx.preference.Preference
 import androidx.preference.SwitchPreferenceCompat
 
-const val PREF_POPULAR_DISPLAY = "POPULAR_DISPLAY"
+// Deprecated
 const val PREF_SCREEN_BG_COLOR = "SCREEN_BG_COLOR"
 const val PREF_SCREEN_FONT_COLOR = "FONT_COLOR"
 const val PREF_HEADING_FONT_SIZE = "HEADING_FONT_SIZE"
 const val PREF_BODY_FONT_SIZE = "BODY_FONT_SIZE"
+
+const val PREF_POPULAR_DISPLAY = "POPULAR_DISPLAY"
+const val PREF_SCREEN_COLORS = "SCREEN_COLORS"
+const val PREF_SCREEN_FONT_SIZE = "SCREEN_FONT_SIZE"
 const val PREF_DISPLAY_TRADITIONAL = "DISPLAY_TRADITIONAL"
 const val PREF_DARK_MODE = "DARK_MODE"
 const val PREF_RATE_LIMIT = "RATE_LIMIT"
+const val PREF_AUTO_BOOKMARK = "AUTO_BOOKMARK"
 
-val RGB_REGEX = Regex("^#[0-9A-F]{6}$", RegexOption.IGNORE_CASE)
-val FONT_SIZE_REGEX = Regex("^(?:\\d+|\\d+\\.\\d+)$")
+val RGB_REGEX = Regex("^#[0-9A-F]{6} #[0-9A-F]{6}$", RegexOption.IGNORE_CASE)
+val FONT_SIZE_REGEX = Regex("^(?:\\d+|\\d+\\.\\d+) (?:\\d+|\\d+\\.\\d+)$")
 val RATE_LIMIT_REGEX = Regex("^\\d+/\\d+$")
 
 fun preferencesInternal(context: Context, pref: SharedPreferences): Array<Preference> {
@@ -56,21 +61,23 @@ fun preferencesInternal(context: Context, pref: SharedPreferences): Array<Prefer
             setDefaultValue("/top/weekvisit/%d.html")
         },
         EditTextPreference(context).apply {
-            key = PREF_SCREEN_BG_COLOR
-            title = "阅读页背景颜色"
-            summary = pref.getString(key, "#FAFAF8")
-            dialogMessage = "请输入正确的十六进制颜色代码，如：#FAFAF8"
-            setDefaultValue("#FAFAF8")
+            key = PREF_SCREEN_COLORS
+            title = "阅读页颜色设置" // "背景色：#FAFAF8 | 文本色：#000000"
+            summary = pref.getString(key, "#FAFAF8 #000000")!!.split(' ').let {
+                "背景色：${it[0]}   |   文本色：${it[1]}"
+            }
+            dialogMessage = "请用空格隔开输入两个十六进制颜色代码，左边为背景色，右边为文本色。\n默认值：#FAFAF8 #000000"
+            setDefaultValue("#FAFAF8 #000000")
             setOnPreferenceChangeListener { _, newValue ->
                 if (RGB_REGEX.matches(newValue as String)) {
-                    summary = newValue
+                    summary = newValue.split(' ').let { "背景色：${it[0]}   |   文本色：${it[1]}" }
                     Toast.makeText(context, "已加载章节需清除章节缓存后生效", Toast.LENGTH_LONG)
                         .show()
                     true
                 } else {
                     Toast.makeText(
                         context,
-                        "“$newValue” 不是一个正确的十六进制颜色代码！",
+                        "“$newValue” 不是符合格式的十六进制颜色代码！",
                         Toast.LENGTH_LONG,
                     ).show()
                     false
@@ -78,54 +85,16 @@ fun preferencesInternal(context: Context, pref: SharedPreferences): Array<Prefer
             }
         },
         EditTextPreference(context).apply {
-            key = PREF_SCREEN_FONT_COLOR
-            title = "阅读页字体颜色"
-            summary = pref.getString(key, "#000000")
-            dialogMessage = "请输入正确的十六进制颜色代码，否则不生效，如：#000000"
-            setDefaultValue("#000000")
-            setOnPreferenceChangeListener { _, newValue ->
-                if (RGB_REGEX.matches(newValue as String)) {
-                    summary = newValue
-                    Toast.makeText(context, "已加载章节需清除章节缓存后生效", Toast.LENGTH_LONG)
-                        .show()
-                    true
-                } else {
-                    Toast.makeText(
-                        context,
-                        "“$newValue” 不是一个正确的十六进制颜色代码！",
-                        Toast.LENGTH_LONG,
-                    ).show()
-                    false
-                }
+            key = PREF_SCREEN_FONT_SIZE
+            title = "阅读页字号设置"
+            summary = pref.getString(key, "52 30")!!.split(' ').let {
+                "标题大小：${it[0]}   |   正文大小：${it[1]}"
             }
-        },
-        EditTextPreference(context).apply {
-            key = PREF_HEADING_FONT_SIZE
-            title = "阅读页标题大小"
-            summary = pref.getString(key, "52")
-            dialogMessage = "请输入一个大于0的字号，可以带小数，如：52（默认值）、52.5"
-            setDefaultValue("52")
+            dialogMessage = "请用空格隔开输入两个大于 0 且可带小数的字号，左边为标题大小，右边为正文大小。\n默认值：52 30"
+            setDefaultValue("52 30")
             setOnPreferenceChangeListener { _, newValue ->
                 if (FONT_SIZE_REGEX.matches(newValue as String)) {
-                    summary = newValue
-                    Toast.makeText(context, "已加载章节需清除章节缓存后生效", Toast.LENGTH_LONG)
-                        .show()
-                    true
-                } else {
-                    Toast.makeText(context, "非法字号！请检查输入格式", Toast.LENGTH_LONG).show()
-                    false
-                }
-            }
-        },
-        EditTextPreference(context).apply {
-            key = PREF_BODY_FONT_SIZE
-            title = "阅读页正文大小"
-            summary = pref.getString(key, "30")
-            dialogMessage = "请输入一个大于0的字号，可以带小数，如：30（默认值）、30.5"
-            setDefaultValue("30")
-            setOnPreferenceChangeListener { _, newValue ->
-                if (FONT_SIZE_REGEX.matches(newValue as String)) {
-                    summary = newValue
+                    summary = newValue.split(' ').let { "标题大小：${it[0]}   |   正文大小：${it[1]}" }
                     Toast.makeText(context, "已加载章节需清除章节缓存后生效", Toast.LENGTH_LONG)
                         .show()
                     true
@@ -158,6 +127,16 @@ fun preferencesInternal(context: Context, pref: SharedPreferences): Array<Prefer
             key = PREF_DARK_MODE
             title = "深色模式"
             summary = "开启后，阅读页面的样式将强制使用黑底白字"
+            setDefaultValue(false)
+            setOnPreferenceChangeListener { _, _ ->
+                Toast.makeText(context, "已加载章节需清除章节缓存后生效", Toast.LENGTH_LONG).show()
+                true
+            }
+        },
+        SwitchPreferenceCompat(context).apply {
+            key = PREF_AUTO_BOOKMARK
+            title = "自动标记书签（源站功能）"
+            summary = "查看任一章节时，自动调用源站的“书签”功能标记该章节，不论该章节是否已读（该功能由源站提供，需在 WebView 中登录账号，否则将自动关闭）"
             setDefaultValue(false)
             setOnPreferenceChangeListener { _, _ ->
                 Toast.makeText(context, "已加载章节需清除章节缓存后生效", Toast.LENGTH_LONG).show()

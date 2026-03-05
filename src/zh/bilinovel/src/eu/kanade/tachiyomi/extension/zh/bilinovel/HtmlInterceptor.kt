@@ -54,30 +54,27 @@ class HtmlInterceptor(
         if (url.host != HtmlInterceptorHelper.HOST) return chain.proceed(request)
 
         val darkMode = pref.getBoolean(PREF_DARK_MODE, false)
-        val bgColor = if (darkMode) {
-            Color.BLACK
+
+        val screenColor = if (darkMode) {
+            Color.BLACK to Color.WHITE
         } else {
-            Color.parseColor(
-                pref.getString(PREF_SCREEN_BG_COLOR, "#FAFAF8"),
-            )
+            pref.getString(PREF_SCREEN_COLORS, "#FAFAF8 #000000")!!.split(' ').let {
+                Color.parseColor(it[0]) to Color.parseColor(it[1])
+            }
         }
-        val fontColor = if (darkMode) {
-            Color.WHITE
-        } else {
-            Color.parseColor(
-                pref.getString(PREF_SCREEN_FONT_COLOR, "#000000"),
-            )
+        val screenFontSize = pref.getString(PREF_SCREEN_FONT_SIZE, "52 30")!!.split(' ').let {
+            it[0].toFloat() to it[1].toFloat()
         }
 
         val paintHeading = TextPaint().apply {
-            color = fontColor
-            textSize = pref.getString(PREF_HEADING_FONT_SIZE, "52.0")!!.toFloat()
+            color = screenColor.second
+            textSize = screenFontSize.first
             typeface = Typeface.DEFAULT_BOLD
             isAntiAlias = true
         }
         val paintBody = TextPaint().apply {
-            color = fontColor
-            textSize = pref.getString(PREF_BODY_FONT_SIZE, "30.0")!!.toFloat()
+            color = screenColor.second
+            textSize = screenFontSize.second
             typeface = Typeface.DEFAULT
             isAntiAlias = true
         }
@@ -143,7 +140,7 @@ class HtmlInterceptor(
         val bitmap = Bitmap.createBitmap(WIDTH, imgHeight, Bitmap.Config.ARGB_8888)
 
         Canvas(bitmap).apply {
-            drawColor(bgColor)
+            drawColor(screenColor.first)
             heading?.let {
                 it.draw(this, X_PADDING, Y_PADDING * 2)
                 // 绘制标题下方的分割线

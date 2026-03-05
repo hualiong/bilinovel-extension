@@ -3,6 +3,7 @@ package eu.kanade.tachiyomi.extension.zh.bilinovel
 import android.util.Log
 import androidx.preference.PreferenceScreen
 import eu.kanade.tachiyomi.network.GET
+import eu.kanade.tachiyomi.network.asObservableSuccess
 import eu.kanade.tachiyomi.network.interceptor.rateLimit
 import eu.kanade.tachiyomi.source.ConfigurableSource
 import eu.kanade.tachiyomi.source.model.FilterList
@@ -20,8 +21,11 @@ import okhttp3.Response
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import org.jsoup.select.Elements
+import rx.Observable
+import rx.schedulers.Schedulers
 import java.text.SimpleDateFormat
 import java.util.Locale
+import kotlin.collections.forEachIndexed
 import kotlin.math.floor
 
 class BiliNovel : HttpSource(), ConfigurableSource {
@@ -30,7 +34,20 @@ class BiliNovel : HttpSource(), ConfigurableSource {
     override val name = "哔哩轻小说"
     override val supportsLatest = true
 
-    private val pref by getPreferencesLazy()
+    private val pref by getPreferencesLazy {
+        getString(PREF_SCREEN_BG_COLOR, null)?.let {
+            val color = getString(PREF_SCREEN_FONT_COLOR, "#000000")
+            edit().putString(PREF_SCREEN_COLORS, "$it $color")
+                .remove(PREF_SCREEN_BG_COLOR)
+                .remove(PREF_SCREEN_FONT_COLOR).apply()
+        }
+        getString(PREF_HEADING_FONT_SIZE, null)?.let {
+            val size = getString(PREF_BODY_FONT_SIZE, "30")
+            edit().putString(PREF_SCREEN_FONT_SIZE, "$it $size")
+                .remove(PREF_HEADING_FONT_SIZE)
+                .remove(PREF_BODY_FONT_SIZE).apply()
+        }
+    }
 
     override fun setupPreferenceScreen(screen: PreferenceScreen) {
         preferencesInternal(screen.context, pref).forEach(screen::addPreference)
@@ -53,13 +70,13 @@ class BiliNovel : HttpSource(), ConfigurableSource {
         val DATE_REGEX = Regex("\\d{4}-\\d{1,2}-\\d{1,2}")
         val PAGE_REGEX = Regex("第(\\d+)/(\\d+)页")
         val MANGA_ID_REGEX = Regex("/novel/(\\d+)\\.html")
-        val CHAPTER_ID_REGEX = Regex("/novel/\\d+/(\\d+)(?:_\\d+)?\\.html")
+        val CHAPTER_ID_REGEX = Regex("/novel/(\\d+)/(\\d+)(?:_\\d+)?\\.html")
         val PAGE_SIZE_REGEX = Regex("（\\d+/(\\d+)）")
         val EXPRESSION_REGEX = Regex("Number.*?;")
         val SALT_REGEX = Regex("(?<![a-zA-Z0-9_])-?0x[0-9a-fA-F]+(?:[+*\\-]-?0x[0-9a-fA-F]+)+")
         val URL_REGEX = Regex("/themes/zhmb/js/chapterlog\\.js\\?v[^\"]+")
         val DATE_FORMAT = SimpleDateFormat("yyyy-MM-dd", Locale.CHINESE)
-        val TRADITIONAL_CHARACTER_MAP = mapOf<Char, Char>(
+        val TRADITIONAL_CHARACTER_MAP = mapOf(
             '皑' to '皚', '蔼' to '藹', '碍' to '礙', '爱' to '愛', '翱' to '翺', '袄' to '襖',
             '奥' to '奧', '坝' to '壩', '罢' to '罷', '摆' to '擺', '败' to '敗', '颁' to '頒',
             '办' to '辦', '绊' to '絆', '帮' to '幫', '绑' to '綁', '镑' to '鎊', '谤' to '謗',
@@ -282,6 +299,7 @@ class BiliNovel : HttpSource(), ConfigurableSource {
 
     private var salt: Pair<Int, Int>? = null
     private val SManga.id get() = MANGA_ID_REGEX.find(url)!!.groups[1]!!.value
+    private val Page.ids get() = CHAPTER_ID_REGEX.find(url)!!.groups.drop(1).map { it!!.value }
     private fun String.toHalfWidthDigits(): String {
         return this.map { if (it in '０'..'９') it - 65248 else it }.joinToString("")
     }
@@ -470,11 +488,7 @@ class BiliNovel : HttpSource(), ConfigurableSource {
         }
 
         // 8. 清空并重新添加处理后的节点
-        content.html("")
-        content.appendChildren(childNodes)
-
-        // 9. 返回最终HTML
-        return content.html()
+        return content.html("").appendChildren(childNodes).html()
     }
 
     // Popular Page
@@ -585,12 +599,40 @@ class BiliNovel : HttpSource(), ConfigurableSource {
 
     // Image
 
+    override fun fetchImageUrl(page: Page): Observable<String> {
+        val result = client.newCall(imageUrlRequest(page))
+            .asObservableSuccess()
+            .map(::imageUrlParse)
+        if (!page.url.contains('_') && pref.getBoolean(PREF_AUTO_BOOKMARK, false)) {
+            val ids = page.ids
+            val url =
+                "$baseUrl/modules/article/addbookcase.php?bid=${ids[0]}&cid=${ids[1]}&pid=1&ajax_request=1"
+            return result.doOnSubscribe {
+                client.newCall(GET(url, headers))
+                    .asObservableSuccess()
+                    .subscribeOn(Schedulers.io())
+                    .subscribe(
+                        {
+                            if (it.body.string().startsWith("对不起")) {
+                                pref.edit().putBoolean(PREF_AUTO_BOOKMARK, false).apply()
+                            }
+                        },
+                        {
+                            // pref.edit().putBoolean(PREF_AUTO_BOOKMARK, false).apply()
+                            it.printStackTrace()
+                        },
+                    )
+            }
+        }
+        return result
+    }
+
     override fun imageUrlParse(response: Response) = response.asJsoup().let { doc ->
         if (salt == null) parseSalt(baseUrl + URL_REGEX.find(doc.body().toString())!!.value)
         val switch = pref.getBoolean(PREF_DISPLAY_TRADITIONAL, false)
         val title = doc.selectFirst("#atitle")?.html()?.takeIf { it.indexOf("/") < 0 } ?: ""
         val content = doc.selectFirst("#acontent")!!
-        val chapterId = CHAPTER_ID_REGEX.find(doc.location())!!.groups[1]!!.value.toInt()
+        val chapterId = CHAPTER_ID_REGEX.find(doc.location())!!.groups[2]!!.value.toInt()
         HtmlInterceptorHelper.createUrl(
             title.convert(switch),
             sort(content, chapterId).convert(switch),
