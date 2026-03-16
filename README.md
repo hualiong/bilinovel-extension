@@ -26,6 +26,9 @@ https://raw.githubusercontent.com/hualiong/bilinovel-extension/main/index.min.js
 
 ## 更新日志
 
+### [1.4.14] - 2026-03-16
+- 修复小说乱序
+
 ### [1.4.13] - 2026-03-05
 - 分别合并阅读页颜色和字号的设置项
 - 支持源站的“标记书签”功能，可在设置中开启，**但必需在 WebView 中登录账号**。
