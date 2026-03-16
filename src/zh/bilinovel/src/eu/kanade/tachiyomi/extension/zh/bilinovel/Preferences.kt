@@ -136,7 +136,7 @@ fun preferencesInternal(context: Context, pref: SharedPreferences): Array<Prefer
         SwitchPreferenceCompat(context).apply {
             key = PREF_AUTO_BOOKMARK
             title = "自动标记书签（源站功能）"
-            summary = "查看任一章节时，自动调用源站的“书签”功能标记该章节，不论该章节是否已读（该功能由源站提供，需在 WebView 中登录账号，否则将自动关闭）"
+            summary = "查看任一章节时，自动调用源站的“书签”功能标记该章节，不论该章节是否已读\n注：该功能由源站提供，需在 WebView 中登录，否则将自动关闭，以及开启该功能后，不建议下载章节再阅读，会导致超前标记"
             setDefaultValue(false)
             setOnPreferenceChangeListener { _, _ ->
                 Toast.makeText(context, "已加载章节需清除章节缓存后生效", Toast.LENGTH_LONG).show()

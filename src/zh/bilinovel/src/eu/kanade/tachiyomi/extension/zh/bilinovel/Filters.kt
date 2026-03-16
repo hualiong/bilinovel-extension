@@ -15,9 +15,9 @@ fun buildFilterList() = FilterList(
 
 class RegionFilter : Filter.Select<String>(
     "文库地区",
-    arrayOf("不限", "日本轻小说", "华文轻小说", "Web轻小说", "轻改漫画", "韩国轻小说"),
+    arrayOf("不限", "日本轻小说", "华文轻小说", "Web轻小说", "韩国轻小说"),
 ) {
-    override fun toString() = arrayOf("0", "1", "2", "3", "4", "5")[state]
+    override fun toString() = arrayOf("0", "1", "2", "3", "5")[state]
 }
 
 class ThemeFilter : Filter.Select<String>(

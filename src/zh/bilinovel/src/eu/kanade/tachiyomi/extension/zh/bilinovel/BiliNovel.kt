@@ -317,13 +317,13 @@ class BiliNovel : HttpSource(), ConfigurableSource {
         }
     }
 
-    private fun Elements.mapToChapter(switch: Boolean, date: Long, chapterBar: String? = null) =
+    private fun Elements.mapToChapter(switch: Boolean, date: Long, volume: String? = null) =
         mapIndexed { i, element ->
             val url = element.absUrl("href").takeUnless("javascript:cid(1)"::equals)
             SChapter.create().apply {
                 name = element.text().toHalfWidthDigits().convert(switch)
                 date_upload = date
-                chapterBar?.let { scanlator = it.convert(switch) }
+                volume?.let { scanlator = it.convert(switch) }
                 setUrlWithoutDomain(url ?: getChapterUrlByContext(i, this@mapToChapter))
             }
         }
@@ -333,10 +333,12 @@ class BiliNovel : HttpSource(), ConfigurableSource {
         var s2 = 0
         val resp = client.newCall(GET(url, headers)).execute()
         EXPRESSION_REGEX.findAll(resp.body.string()).forEach { m ->
-            SALT_REGEX.findAll(m.value).takeIf { it.count() == 2 }?.let {
-                s1 = calculate(it.first().value)
-                s2 = calculate(it.last().value)
-            }
+            SALT_REGEX.findAll(m.value).takeIf { it.count() == 2 }
+                ?.map { calculate(it.value) }
+                ?.let { salt ->
+                    salt.first().takeIf { it > 100 }?.let { s1 = it }
+                    salt.last().takeIf { it > 200 }?.let { s2 = it }
+                }
         }
         salt = Pair(s1, s2).apply {
             val version = url.substringAfter("?")
@@ -507,7 +509,7 @@ class BiliNovel : HttpSource(), ConfigurableSource {
                 title = img.attr("alt").convert()
             }
         }
-        MangasPage(mangas, hasNextPage(doc, mangas.size))
+        MangasPage(mangas, mangas.isNotEmpty() && hasNextPage(doc, mangas.size))
     }
 
     // Latest Page
@@ -572,10 +574,15 @@ class BiliNovel : HttpSource(), ConfigurableSource {
     override fun chapterListParse(response: Response) = response.asJsoup().let { resp ->
         val switch = pref.getBoolean(PREF_DISPLAY_TRADITIONAL, false)
         val info = resp.selectFirst(".chapter-sub-title")!!.text()
+        val title = resp.selectFirst(".book-title")!!.text()
         val date = DATE_FORMAT.tryParse(DATE_REGEX.find(info)?.value)
         resp.select(".catalog-volume").takeIf(Elements::isNotEmpty)?.flatMap {
-            val chapterBar = it.selectFirst(".chapter-bar")!!.text().toHalfWidthDigits()
-            it.select(".chapter-li-a").mapToChapter(switch, date, chapterBar)
+            val bar = it.selectFirst(".chapter-bar")!!.text().substring(title.length + 1)
+            val volume = if (bar.first().isDigit()) "Vol.$bar" else bar.toHalfWidthDigits()
+            // val volume = NUM_REGEX.matchEntire(bar.substringBefore("（"))
+            //     ?.let { r -> "第 ${r.value} 卷" + bar.substringAfter(r.value) }
+            //     ?: bar.toHalfWidthDigits()
+            it.select(".chapter-li-a").mapToChapter(switch, date, volume)
         } ?: resp.select(".chapter-li-a").mapToChapter(switch, date)
     }.reversed()
 
