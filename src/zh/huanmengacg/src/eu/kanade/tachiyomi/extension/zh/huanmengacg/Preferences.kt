@@ -7,34 +7,35 @@ import androidx.preference.EditTextPreference
 import androidx.preference.Preference
 import androidx.preference.SwitchPreferenceCompat
 
-const val PREF_SCREEN_BG_COLOR = "SCREEN_BG_COLOR"
-const val PREF_SCREEN_FONT_COLOR = "FONT_COLOR"
-const val PREF_HEADING_FONT_SIZE = "HEADING_FONT_SIZE"
-const val PREF_BODY_FONT_SIZE = "BODY_FONT_SIZE"
+const val PREF_SCREEN_COLORS = "SCREEN_COLORS"
+const val PREF_SCREEN_FONT_SIZE = "SCREEN_FONT_SIZE"
 const val PREF_LINES_PER_PAGE = "LINES_PER_PAGE"
 const val PREF_DARK_MODE = "DARK_MODE"
 
-val RGB_REGEX = Regex("^#[0-9A-F]{6}$", RegexOption.IGNORE_CASE)
-val FONT_SIZE_REGEX = Regex("^(?:\\d+|\\d+\\.\\d+)$")
+val RGB_REGEX = Regex("^#[0-9A-F]{6} #[0-9A-F]{6}$", RegexOption.IGNORE_CASE)
+val FONT_SIZE_REGEX = Regex("^(?:\\d+|\\d+\\.\\d+) (?:\\d+|\\d+\\.\\d+)$")
 val NUM_REGEX = Regex("\\d+")
 
 fun preferencesInternal(context: Context, pref: SharedPreferences): Array<Preference> {
     return arrayOf(
         EditTextPreference(context).apply {
-            key = PREF_SCREEN_BG_COLOR
-            title = "阅读页背景颜色"
-            summary = pref.getString(key, "#FAFAF8")
-            dialogMessage = "请输入正确的十六进制颜色代码，如：#FAFAF8"
-            setDefaultValue("#FAFAF8")
+            key = PREF_SCREEN_COLORS
+            title = "阅读页颜色设置" // "背景色：#FAFAF8 | 文本色：#000000"
+            summary = pref.getString(key, "#FAFAF8 #000000")!!.split(' ').let {
+                "背景色：${it[0]}   |   文本色：${it[1]}"
+            }
+            dialogMessage = "请用空格隔开输入两个十六进制颜色代码，左边为背景色，右边为文本色。\n默认值：#FAFAF8 #000000"
+            setDefaultValue("#FAFAF8 #000000")
             setOnPreferenceChangeListener { _, newValue ->
                 if (RGB_REGEX.matches(newValue as String)) {
-                    summary = newValue
-                    Toast.makeText(context, "已加载章节需清除章节缓存后生效", Toast.LENGTH_LONG).show()
+                    summary = newValue.split(' ').let { "背景色：${it[0]}   |   文本色：${it[1]}" }
+                    Toast.makeText(context, "已加载章节需清除章节缓存后生效", Toast.LENGTH_LONG)
+                        .show()
                     true
                 } else {
                     Toast.makeText(
                         context,
-                        "“$newValue” 不是一个正确的十六进制颜色代码！",
+                        "“$newValue” 不是符合格式的十六进制颜色代码！",
                         Toast.LENGTH_LONG,
                     ).show()
                     false
@@ -42,53 +43,18 @@ fun preferencesInternal(context: Context, pref: SharedPreferences): Array<Prefer
             }
         },
         EditTextPreference(context).apply {
-            key = PREF_SCREEN_FONT_COLOR
-            title = "阅读页字体颜色"
-            summary = pref.getString(key, "#000000")
-            dialogMessage = "请输入正确的十六进制颜色代码，否则不生效，如：#000000"
-            setDefaultValue("#000000")
-            setOnPreferenceChangeListener { _, newValue ->
-                if (RGB_REGEX.matches(newValue as String)) {
-                    summary = newValue
-                    Toast.makeText(context, "已加载章节需清除章节缓存后生效", Toast.LENGTH_LONG).show()
-                    true
-                } else {
-                    Toast.makeText(
-                        context,
-                        "“$newValue” 不是一个正确的十六进制颜色代码！",
-                        Toast.LENGTH_LONG,
-                    ).show()
-                    false
-                }
+            key = PREF_SCREEN_FONT_SIZE
+            title = "阅读页字号设置"
+            summary = pref.getString(key, "52 30")!!.split(' ').let {
+                "标题大小：${it[0]}   |   正文大小：${it[1]}"
             }
-        },
-        EditTextPreference(context).apply {
-            key = PREF_HEADING_FONT_SIZE
-            title = "阅读页标题大小"
-            summary = pref.getString(key, "52")
-            dialogMessage = "请输入一个大于0的字号，可以带小数，如：52（默认值）、52.5"
-            setDefaultValue("52")
+            dialogMessage = "请用空格隔开输入两个大于 0 且可带小数的字号，左边为标题大小，右边为正文大小。\n默认值：52 30"
+            setDefaultValue("52 30")
             setOnPreferenceChangeListener { _, newValue ->
                 if (FONT_SIZE_REGEX.matches(newValue as String)) {
-                    summary = newValue
-                    Toast.makeText(context, "已加载章节需清除章节缓存后生效", Toast.LENGTH_LONG).show()
-                    true
-                } else {
-                    Toast.makeText(context, "非法字号！请检查输入格式", Toast.LENGTH_LONG).show()
-                    false
-                }
-            }
-        },
-        EditTextPreference(context).apply {
-            key = PREF_BODY_FONT_SIZE
-            title = "阅读页正文大小"
-            summary = pref.getString(key, "30")
-            dialogMessage = "请输入一个大于0的字号，可以带小数，如：30（默认值）、30.5"
-            setDefaultValue("30")
-            setOnPreferenceChangeListener { _, newValue ->
-                if (FONT_SIZE_REGEX.matches(newValue as String)) {
-                    summary = newValue
-                    Toast.makeText(context, "已加载章节需清除章节缓存后生效", Toast.LENGTH_LONG).show()
+                    summary = newValue.split(' ').let { "标题大小：${it[0]}   |   正文大小：${it[1]}" }
+                    Toast.makeText(context, "已加载章节需清除章节缓存后生效", Toast.LENGTH_LONG)
+                        .show()
                     true
                 } else {
                     Toast.makeText(context, "非法字号！请检查输入格式", Toast.LENGTH_LONG).show()
