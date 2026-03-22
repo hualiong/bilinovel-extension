@@ -552,18 +552,17 @@ class BiliNovel : HttpSource(), ConfigurableSource {
             "**別名**：${it.text()}\n\n---\n\n"
         } ?: ""
         val desc = doc.selectFirst("#bookSummary > content")?.wholeText()?.trim()
-        setUrlWithoutDomain(doc.location())
         title = doc.selectFirst(".book-title")!!.text().convert(switch)
         thumbnail_url = doc.selectFirst(".book-cover")!!.attr("src")
         description = bkname.convert(switch) + desc?.convert(switch)
         author = doc.selectFirst(".authorname")?.text()?.convert(switch)
+        artist = doc.selectFirst(".illname")?.text()?.substringBefore('(')?.convert(switch)
         status = when (meta.getOrNull(1)) {
             "连载", "連載" -> SManga.ONGOING
             "完结", "完結" -> SManga.COMPLETED
             else -> SManga.UNKNOWN
         }
         genre = (tags + meta.getOrElse(2) { "" }).joinToString()
-        initialized = true
     }
 
     // Catalog Page
