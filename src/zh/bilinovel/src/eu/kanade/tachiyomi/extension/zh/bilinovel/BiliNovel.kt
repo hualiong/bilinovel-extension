@@ -54,10 +54,10 @@ class BiliNovel : HttpSource(), ConfigurableSource {
     }
 
     override val client = super.client.newBuilder()
-        .addInterceptor(HtmlInterceptor(baseUrl, pref)).also {
+        .addInterceptor(NovelInterceptor(baseUrl, pref)).also {
             val split = pref.getString(PREF_RATE_LIMIT, "10/10")!!.split("/")
             it.rateLimit(split[0].toInt(), split[1].toLong())
-        }.addNetworkInterceptor(NovelInterceptor()).build()
+        }.addNetworkInterceptor(ChapterInterceptor()).build()
 
     override fun headersBuilder() = super.headersBuilder()
         .add("Referer", "$baseUrl/")
