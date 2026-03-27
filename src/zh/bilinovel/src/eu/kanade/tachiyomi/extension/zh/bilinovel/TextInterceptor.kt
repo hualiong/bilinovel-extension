@@ -30,30 +30,31 @@ import java.net.URL
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 
-// Designer string values:
-private const val WIDTH: Int = 1000
-private const val X_PADDING: Float = 50f
-private const val Y_PADDING: Float = 30f
-private const val SPACING_MULT: Float = 1.0f
-private const val SPACING_ADD: Float = 10f
-private const val DIVIDER_HEIGHT: Float = 2f
-private const val DIVIDER_MARGIN: Float = 30f
-
-class NovelInterceptor(
+class TextInterceptor(
     private val baseUrl: String,
     private val pref: SharedPreferences,
 ) : Interceptor {
 
     companion object {
+        private const val HOST = "bilinovel-interceptor"
+        private const val WIDTH: Int = 1000
+        private const val X_PADDING: Float = 50f
+        private const val Y_PADDING: Float = 30f
+        private const val SPACING_MULT: Float = 1.0f
+        private const val SPACING_ADD: Float = 10f
+        private const val DIVIDER_HEIGHT: Float = 2f
+        private const val DIVIDER_MARGIN: Float = 30f
         val URL_REGEX = Regex("""<img[^>]+src\s*=\s*["']([^"']+)["'][^>]*>""")
         val DIVIDER_COLOR = Color.parseColor("#E0E0E0")
+        fun createUrl(title: String, text: String): String {
+            return "http://$HOST/" + Uri.encode(title) + "/" + Uri.encode(text)
+        }
     }
 
-    @Suppress("DEPRECATION")
     override fun intercept(chain: Interceptor.Chain): Response {
         val request = chain.request()
         val url = request.url
-        if (url.host != HtmlInterceptorHelper.HOST) return chain.proceed(request)
+        if (url.host != HOST) return chain.proceed(request)
 
         val darkMode = pref.getBoolean(PREF_DARK_MODE, false)
 
@@ -83,15 +84,11 @@ class NovelInterceptor(
 
         val heading = url.pathSegments[0].takeIf { it.isNotEmpty() }?.let {
             val title = Html.fromHtml(url.pathSegments[0], Html.FROM_HTML_MODE_LEGACY).toString()
-            StaticLayout(
-                title,
-                paintHeading,
-                (WIDTH - 2 * X_PADDING).toInt(),
-                Layout.Alignment.ALIGN_CENTER,
-                SPACING_MULT,
-                SPACING_ADD,
-                false,
-            )
+            StaticLayout.Builder.obtain(title, 0, title.length, paintHeading, (WIDTH - 2 * X_PADDING).toInt())
+                .setAlignment(Layout.Alignment.ALIGN_CENTER)
+                .setLineSpacing(SPACING_ADD, SPACING_MULT) // 注意参数顺序：add, mult
+                .setIncludePad(false)
+                .build()
         }
 
         val body = url.pathSegments[1].takeIf { it.isNotEmpty() }?.let {
@@ -139,15 +136,11 @@ class NovelInterceptor(
                 null,
             )
 
-            StaticLayout(
-                spanned,
-                paintBody,
-                (WIDTH - 2 * X_PADDING).toInt(),
-                Layout.Alignment.ALIGN_NORMAL,
-                SPACING_MULT,
-                SPACING_ADD,
-                false,
-            )
+            StaticLayout.Builder.obtain(spanned, 0, spanned.length, paintBody, (WIDTH - 2 * X_PADDING).toInt())
+                .setAlignment(Layout.Alignment.ALIGN_NORMAL)
+                .setLineSpacing(SPACING_ADD, SPACING_MULT)
+                .setIncludePad(false)
+                .build()
         }
 
         // Image building
@@ -272,13 +265,5 @@ class NovelInterceptor(
         canvas.translate(x, y)
         this.draw(canvas)
         canvas.restore()
-    }
-}
-
-object HtmlInterceptorHelper {
-    const val HOST = "bilinovel-htmlinterceptor"
-
-    fun createUrl(title: String, text: String): String {
-        return "http://$HOST/" + Uri.encode(title) + "/" + Uri.encode(text)
     }
 }

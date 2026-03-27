@@ -54,7 +54,7 @@ class BiliNovel : HttpSource(), ConfigurableSource {
     }
 
     override val client = super.client.newBuilder()
-        .addInterceptor(NovelInterceptor(baseUrl, pref)).also {
+        .addInterceptor(TextInterceptor(baseUrl, pref)).also {
             val split = pref.getString(PREF_RATE_LIMIT, "10/10")!!.split("/")
             it.rateLimit(split[0].toInt(), split[1].toLong())
         }.addNetworkInterceptor(ChapterInterceptor()).build()
@@ -74,7 +74,9 @@ class BiliNovel : HttpSource(), ConfigurableSource {
         val PAGE_SIZE_REGEX = Regex("（\\d+/(\\d+)）")
         val EXPRESSION_REGEX = Regex("Number.*?;")
         val SALT_REGEX = Regex("(?<![a-zA-Z0-9_])-?0x[0-9a-fA-F]+(?:[+*\\-]-?0x[0-9a-fA-F]+)+")
-        val URL_REGEX = Regex("/themes/zhmb/js/chapterlog\\.js\\?v[^\"]+")
+        val CHAPTERLOG_REGEX = Regex("/themes/zhmb/js/chapterlog\\.js\\?v[^\"]+")
+        val URL_REGEX = Regex("https?://(?:www\\.)?([-a-zA-Z0-9@:%._+~#=]{2,256}\\.[a-z]{2,6}\\b)*(/[/\\w.-]*)*[?]*(.+)*", RegexOption.IGNORE_CASE)
+        val NEWLINE_REGEX = Regex("(?:\n\r\n)+")
         val DATE_FORMAT = SimpleDateFormat("yyyy-MM-dd", Locale.CHINESE)
         val TRADITIONAL_CHARACTER_MAP = mapOf(
             '皑' to '皚', '蔼' to '藹', '碍' to '礙', '爱' to '愛', '翱' to '翺', '袄' to '襖',
@@ -317,6 +319,8 @@ class BiliNovel : HttpSource(), ConfigurableSource {
         }
     }
 
+    private fun Element.formatText(c: String) = this.wholeText().replace(NEWLINE_REGEX, c).trim()
+
     private fun Elements.mapToChapter(switch: Boolean, date: Long, volume: String? = null) =
         mapIndexed { i, element ->
             val url = element.absUrl("href").takeUnless("javascript:cid(1)"::equals)
@@ -548,13 +552,13 @@ class BiliNovel : HttpSource(), ConfigurableSource {
         val doc = response.asJsoup()
         val meta = doc.select(".book-meta")[1].text().convert(switch).split("|")
         val tags = doc.select(".tag-small").map { it.text().convert(switch) }
-        val bkname = doc.selectFirst(".bkname-body")?.let {
-            "**別名**：${it.text()}\n\n---\n\n"
-        } ?: ""
-        val desc = doc.selectFirst("#bookSummary > content")?.wholeText()?.trim()
+        val notice = doc.selectFirst(".notice")?.takeIf { pref.getBoolean(PREF_NOTICE, true) }
+            ?.let { "> ${it.formatText("\n")}\n\n" }?.replace(URL_REGEX, "<$0>") ?: ""
+        val desc = doc.selectFirst("#bookSummary > content")!!.formatText("\n\n\n")
+        val bkname = doc.selectFirst(".bkname-body")?.let { "\n\n\n**別名**：${it.text()}" } ?: ""
         title = doc.selectFirst(".book-title")!!.text().convert(switch)
         thumbnail_url = doc.selectFirst(".book-cover")!!.attr("src")
-        description = bkname.convert(switch) + desc?.convert(switch)
+        description = "$notice$desc$bkname".convert(switch)
         author = doc.selectFirst(".authorname")?.text()?.convert(switch)
         artist = doc.selectFirst(".illname")?.text()?.substringBefore('(')?.convert(switch)
         status = when (meta.getOrNull(1)) {
@@ -634,12 +638,12 @@ class BiliNovel : HttpSource(), ConfigurableSource {
     }
 
     override fun imageUrlParse(response: Response) = response.asJsoup().let { doc ->
-        if (salt == null) parseSalt(baseUrl + URL_REGEX.find(doc.body().toString())!!.value)
+        if (salt == null) parseSalt(baseUrl + CHAPTERLOG_REGEX.find(doc.body().toString())!!.value)
         val switch = pref.getBoolean(PREF_DISPLAY_TRADITIONAL, false)
         val title = doc.selectFirst("#atitle")?.html()?.takeIf { it.indexOf("/") < 0 } ?: ""
         val content = doc.selectFirst("#acontent")!!
         val chapterId = CHAPTER_ID_REGEX.find(doc.location())!!.groups[2]!!.value.toInt()
-        HtmlInterceptorHelper.createUrl(
+        TextInterceptor.createUrl(
             title.convert(switch),
             sort(content, chapterId).convert(switch),
         )

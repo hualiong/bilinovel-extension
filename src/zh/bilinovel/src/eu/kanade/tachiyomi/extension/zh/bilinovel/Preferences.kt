@@ -21,6 +21,7 @@ const val PREF_DISPLAY_TRADITIONAL = "DISPLAY_TRADITIONAL"
 const val PREF_DARK_MODE = "DARK_MODE"
 const val PREF_RATE_LIMIT = "RATE_LIMIT"
 const val PREF_AUTO_BOOKMARK = "AUTO_BOOKMARK"
+const val PREF_NOTICE = "NOTICE"
 
 val RGB_REGEX = Regex("^#[0-9A-F]{6} #[0-9A-F]{6}$", RegexOption.IGNORE_CASE)
 val FONT_SIZE_REGEX = Regex("^(?:\\d+|\\d+\\.\\d+) (?:\\d+|\\d+\\.\\d+)$")
@@ -30,7 +31,7 @@ fun preferencesInternal(context: Context, pref: SharedPreferences): Array<Prefer
     return arrayOf(
         ListPreference(context).apply {
             key = PREF_POPULAR_DISPLAY
-            title = "热门漫画显示内容"
+            title = "热门显示内容"
             summary = "%s"
             entries = arrayOf(
                 "月点击榜",
@@ -136,7 +137,7 @@ fun preferencesInternal(context: Context, pref: SharedPreferences): Array<Prefer
         SwitchPreferenceCompat(context).apply {
             key = PREF_AUTO_BOOKMARK
             title = "自动标记书签（源站功能）"
-            summary = "查看任一章节时，自动调用源站的“书签”功能标记该章节，不论该章节是否已读\n注：该功能由源站提供，需在 WebView 中登录，否则将自动关闭，以及开启该功能后，不建议下载章节再阅读，会导致超前标记"
+            summary = "阅读任一章节时，自动调用源站的“书签”功能标记该章节（不建议下载后阅读，会导致超前标记）\n注：需在 WebView 中登录，否则将自动关闭"
             setDefaultValue(false)
             setOnPreferenceChangeListener { _, newVal ->
                 if (newVal as Boolean) {
@@ -144,6 +145,11 @@ fun preferencesInternal(context: Context, pref: SharedPreferences): Array<Prefer
                 }
                 true
             }
+        },
+        SwitchPreferenceCompat(context).apply {
+            key = PREF_NOTICE
+            title = "在作品简介里显示“公告”信息"
+            setDefaultValue(true)
         },
         SwitchPreferenceCompat(context).apply {
             key = PREF_DISPLAY_TRADITIONAL
