@@ -615,8 +615,7 @@ class BiliNovel : HttpSource(), ConfigurableSource {
             .map(::imageUrlParse)
         if (!page.url.contains('_') && pref.getBoolean(PREF_AUTO_BOOKMARK, false)) {
             val ids = page.ids
-            val url =
-                "$baseUrl/modules/article/addbookcase.php?bid=${ids[0]}&cid=${ids[1]}&pid=1&ajax_request=1"
+            val url = "$baseUrl/modules/article/addbookcase.php?bid=${ids[0]}&cid=${ids[1]}&pid=1&ajax_request=1"
             return result.doOnSubscribe {
                 client.newCall(GET(url, headers))
                     .asObservableSuccess()

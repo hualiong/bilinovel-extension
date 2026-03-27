@@ -135,6 +135,12 @@ fun preferencesInternal(context: Context, pref: SharedPreferences): Array<Prefer
             }
         },
         SwitchPreferenceCompat(context).apply {
+            key = PREF_NOTICE
+            title = "显示作品公告"
+            summary = "如果有，则在简介里显示该作品的公告通知"
+            setDefaultValue(true)
+        },
+        SwitchPreferenceCompat(context).apply {
             key = PREF_AUTO_BOOKMARK
             title = "自动标记书签（源站功能）"
             summary = "阅读任一章节时，自动调用源站的“书签”功能标记该章节（不建议下载后阅读，会导致超前标记）\n注：需在 WebView 中登录，否则将自动关闭"
@@ -145,11 +151,6 @@ fun preferencesInternal(context: Context, pref: SharedPreferences): Array<Prefer
                 }
                 true
             }
-        },
-        SwitchPreferenceCompat(context).apply {
-            key = PREF_NOTICE
-            title = "在作品简介里显示“公告”信息"
-            setDefaultValue(true)
         },
         SwitchPreferenceCompat(context).apply {
             key = PREF_DISPLAY_TRADITIONAL
