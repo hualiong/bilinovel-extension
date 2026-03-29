@@ -3,6 +3,7 @@ package eu.kanade.tachiyomi.extension.zh.bilinovel
 import okhttp3.HttpUrl
 import okhttp3.Interceptor
 import okhttp3.Response
+import java.io.IOException
 
 class ChapterInterceptor : Interceptor {
 
@@ -45,7 +46,7 @@ class ChapterInterceptor : Interceptor {
         return chain.proceed(origin.newBuilder().addHeader("Cookie", "night=1").build())
             .also { resp ->
                 if (resp.isRedirect && resp.header("Location")?.indexOf("linovelib") != -1) {
-                    throw Exception("不支持PC端查看，请在设置中更换移动端UA标识")
+                    throw IOException("不支持PC端查看，请在设置中更换移动端UA标识")
                 }
             }
     }
