@@ -29,7 +29,7 @@ android {
         targetSdk AndroidConfig.targetSdk
         applicationIdSuffix project.parent.name + "." + project.name
         versionCode theme == null ? extVersionCode : theme.baseVersionCode + overrideVersionCode
-        versionName "1.4.$versionCode"
+        versionName "1.5.$versionCode"
         base {
             archivesName = "tachiyomi-$applicationIdSuffix-v$versionName"
         }

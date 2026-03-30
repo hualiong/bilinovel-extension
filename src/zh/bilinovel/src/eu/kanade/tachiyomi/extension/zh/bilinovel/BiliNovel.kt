@@ -27,6 +27,7 @@ import java.text.SimpleDateFormat
 import java.util.Locale
 import kotlin.collections.forEachIndexed
 import kotlin.math.floor
+import kotlin.time.Duration.Companion.seconds
 
 class BiliNovel : HttpSource(), ConfigurableSource {
     override val baseUrl = "https://www.bilinovel.com"
@@ -56,7 +57,7 @@ class BiliNovel : HttpSource(), ConfigurableSource {
     override val client = super.client.newBuilder()
         .addInterceptor(TextInterceptor(baseUrl, pref)).also {
             val split = pref.getString(PREF_RATE_LIMIT, "10/10")!!.split("/")
-            it.rateLimit(split[0].toInt(), split[1].toLong())
+            it.rateLimit(split[0].toInt(), split[1].toInt().seconds)
         }.addNetworkInterceptor(ChapterInterceptor()).build()
 
     override fun headersBuilder() = super.headersBuilder()
