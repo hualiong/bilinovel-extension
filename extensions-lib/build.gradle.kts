@@ -1,7 +1,6 @@
 plugins {
     id("com.android.library")
-    id("kotlin-android")
-    // 如果不再需要发布，可以不引入 'maven-publish'
+    kotlin("android")
 }
 
 android {

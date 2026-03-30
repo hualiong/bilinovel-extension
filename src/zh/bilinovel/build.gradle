@@ -1,12 +1,8 @@
 ext {
     extName = 'BiliNovel'
     extClass = '.BiliNovel'
-    extVersionCode = 15
+    extVersionCode = 16
     isNsfw = false
 }
 
 apply from: "$rootDir/common.gradle"
-
-dependencies {
-    compileOnly(project(':lib:extensions-lib'))
-}

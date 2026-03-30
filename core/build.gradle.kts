@@ -24,5 +24,5 @@ android {
 
 dependencies {
     compileOnly(versionCatalogs.named("libs").findBundle("common").get())
-    compileOnly(project(":lib:extensions-lib"))
+    compileOnly(project(":extensions-lib"))
 }

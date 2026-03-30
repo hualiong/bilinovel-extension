@@ -9,6 +9,7 @@ loadIndividualExtension("zh", "huanmengacg")
  * ===================================== COMMON CONFIGURATION ======================================
  */
 include(":core")
+include(":extensions-lib")
 
 // Load all modules under /lib
 File(rootDir, "lib").eachDir { include("lib:${it.name}") }

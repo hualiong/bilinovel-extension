@@ -38,6 +38,7 @@ kotlinter {
 
 dependencies {
     compileOnly(versionCatalogs.named("libs").findBundle("common").get())
+    compileOnly(project(":extensions-lib"))
     implementation(project(":core"))
 }
 

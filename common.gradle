@@ -102,6 +102,7 @@ android {
 dependencies {
     if (theme != null) implementation(theme) // Overrides core launcher icons
     implementation(project(":core"))
+    compileOnly(project(":extensions-lib"))
     compileOnly(libs.bundles.common)
 }
 
