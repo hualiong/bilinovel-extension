@@ -3,7 +3,8 @@ package eu.kanade.tachiyomi.extension.zh.bilinovel
 import android.util.Log
 import androidx.preference.PreferenceScreen
 import eu.kanade.tachiyomi.network.GET
-import eu.kanade.tachiyomi.network.asObservableSuccess
+import eu.kanade.tachiyomi.network.await
+import eu.kanade.tachiyomi.network.awaitSuccess
 import eu.kanade.tachiyomi.network.interceptor.rateLimit
 import eu.kanade.tachiyomi.source.ConfigurableSource
 import eu.kanade.tachiyomi.source.model.FilterList
@@ -12,24 +13,27 @@ import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.HttpSource
+import eu.kanade.tachiyomi.source.online.ResolvableSource
+import eu.kanade.tachiyomi.source.online.UriType
 import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.utils.getPreferencesLazy
 import keiyoushi.utils.tryParse
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.launch
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import org.jsoup.select.Elements
-import rx.Observable
-import rx.schedulers.Schedulers
 import java.text.SimpleDateFormat
 import java.util.Locale
-import kotlin.collections.forEachIndexed
 import kotlin.math.floor
 import kotlin.time.Duration.Companion.seconds
 
-class BiliNovel : HttpSource(), ConfigurableSource {
+class BiliNovel : HttpSource(), ConfigurableSource, ResolvableSource {
     override val baseUrl = "https://www.bilinovel.com"
     override val lang = "zh"
     override val name = "哔哩轻小说"
@@ -68,10 +72,11 @@ class BiliNovel : HttpSource(), ConfigurableSource {
     // Customize
 
     companion object {
+        const val BOOKMARK_URL = "%s/modules/article/addbookcase.php?bid=%s&cid=%s&pid=1&ajax_request=1"
         val DATE_REGEX = Regex("\\d{4}-\\d{1,2}-\\d{1,2}")
         val PAGE_REGEX = Regex("第(\\d+)/(\\d+)页")
         val MANGA_ID_REGEX = Regex("/novel/(\\d+)\\.html")
-        val CHAPTER_ID_REGEX = Regex("/novel/(\\d+)/(\\d+)(?:_\\d+)?\\.html")
+        val CHAPTER_IDS_REGEX = Regex("/novel/(\\d+)/(\\d+)(?:_\\d+)?\\.html")
         val PAGE_SIZE_REGEX = Regex("（\\d+/(\\d+)）")
         val EXPRESSION_REGEX = Regex("Number.*?;")
         val SALT_REGEX = Regex("(?<![a-zA-Z0-9_])-?0x[0-9a-fA-F]+(?:[+*\\-]-?0x[0-9a-fA-F]+)+")
@@ -302,7 +307,7 @@ class BiliNovel : HttpSource(), ConfigurableSource {
 
     private var salt: Pair<Int, Int>? = null
     private val SManga.id get() = MANGA_ID_REGEX.find(url)!!.groups[1]!!.value
-    private val Page.ids get() = CHAPTER_ID_REGEX.find(url)!!.groups.drop(1).map { it!!.value }
+    private val Page.ids get() = CHAPTER_IDS_REGEX.find(url)!!.groups.drop(1).map { it!!.value }
     private fun String.toHalfWidthDigits(): String {
         return this.map { if (it in '０'..'９') it - 65248 else it }.joinToString("")
     }
@@ -498,6 +503,40 @@ class BiliNovel : HttpSource(), ConfigurableSource {
         return content.html("").appendChildren(childNodes).html()
     }
 
+    // Deep Link
+
+    override fun getUriType(uri: String): UriType {
+        val url = runCatching { uri.toHttpUrl() }.getOrNull() ?: return UriType.Unknown
+        val uriType = when {
+            !url.host.endsWith("bilinovel.com") && !url.host.endsWith("linovelib.com") -> UriType.Unknown
+            MANGA_ID_REGEX.matches(url.encodedPath) -> UriType.Manga
+            CHAPTER_IDS_REGEX.matches(url.encodedPath) -> UriType.Chapter
+            else -> UriType.Unknown
+        }
+        return uriType
+    }
+
+    override suspend fun getManga(uri: String): SManga? {
+        val httpUrl = uri.toHttpUrl()
+        val url = if (MANGA_ID_REGEX.matches(httpUrl.encodedPath)) {
+            httpUrl.encodedPath
+        } else {
+            val mangaId = CHAPTER_IDS_REGEX.find(httpUrl.encodedPath)!!.groups[1]!!.value
+            "/novel/$mangaId.html"
+        }
+        return try {
+            val response = client.newCall(GET(baseUrl + url, headers)).await()
+            mangaDetailsParse(response)
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    override suspend fun getChapter(uri: String) = SChapter.create().apply {
+        url = uri.toHttpUrl().encodedPath
+        name = "Test Chapter"
+    }
+
     // Popular Page
 
     override fun popularMangaRequest(page: Int): Request {
@@ -519,8 +558,7 @@ class BiliNovel : HttpSource(), ConfigurableSource {
 
     // Latest Page
 
-    override fun latestUpdatesRequest(page: Int) =
-        GET("$baseUrl/top/lastupdate/$page.html", headers)
+    override fun latestUpdatesRequest(page: Int) = GET("$baseUrl/top/lastupdate/$page.html", headers)
 
     override fun latestUpdatesParse(response: Response) = popularMangaParse(response)
 
@@ -557,6 +595,7 @@ class BiliNovel : HttpSource(), ConfigurableSource {
             ?.let { "> ${it.formatText("\n")}\n\n" }?.replace(URL_REGEX, "<$0>") ?: ""
         val desc = doc.selectFirst("#bookSummary > content")!!.formatText("\n\n\n")
         val bkname = doc.selectFirst(".bkname-body")?.let { "\n\n\n**別名**：${it.text()}" } ?: ""
+        setUrlWithoutDomain(doc.location())
         title = doc.selectFirst(".book-title")!!.text().convert(switch)
         thumbnail_url = doc.selectFirst(".book-cover")!!.attr("src")
         description = "$notice$desc$bkname".convert(switch)
@@ -568,6 +607,7 @@ class BiliNovel : HttpSource(), ConfigurableSource {
             else -> SManga.UNKNOWN
         }
         genre = (tags + meta.getOrElse(2) { "" }).joinToString()
+        initialized = true
     }
 
     // Catalog Page
@@ -610,31 +650,24 @@ class BiliNovel : HttpSource(), ConfigurableSource {
 
     // Image
 
-    override fun fetchImageUrl(page: Page): Observable<String> {
-        val result = client.newCall(imageUrlRequest(page))
-            .asObservableSuccess()
-            .map(::imageUrlParse)
+    override suspend fun getImageUrl(page: Page): String {
         if (!page.url.contains('_') && pref.getBoolean(PREF_AUTO_BOOKMARK, false)) {
             val ids = page.ids
-            val url = "$baseUrl/modules/article/addbookcase.php?bid=${ids[0]}&cid=${ids[1]}&pid=1&ajax_request=1"
-            return result.doOnSubscribe {
-                client.newCall(GET(url, headers))
-                    .asObservableSuccess()
-                    .subscribeOn(Schedulers.io())
-                    .subscribe(
-                        {
-                            if (it.body.string().startsWith("对不起")) {
-                                pref.edit().putBoolean(PREF_AUTO_BOOKMARK, false).apply()
-                            }
-                        },
-                        {
-                            // pref.edit().putBoolean(PREF_AUTO_BOOKMARK, false).apply()
-                            it.printStackTrace()
-                        },
-                    )
+            val apiUrl = BOOKMARK_URL.format(baseUrl, ids[0], ids[1])
+            CoroutineScope(currentCoroutineContext()).launch(Dispatchers.IO) {
+                try {
+                    val response = client.newCall(GET(apiUrl, headers)).awaitSuccess()
+                    if (response.body.string().startsWith("对不起")) {
+                        pref.edit().putBoolean(PREF_AUTO_BOOKMARK, false).apply()
+                    }
+                } catch (e: Exception) {
+                    pref.edit().putBoolean(PREF_AUTO_BOOKMARK, false).apply()
+                    Log.e("BiliNovel", e.message ?: e.javaClass.name)
+                }
             }
         }
-        return result
+        val response = client.newCall(imageUrlRequest(page)).awaitSuccess()
+        return imageUrlParse(response)
     }
 
     override fun imageUrlParse(response: Response) = response.asJsoup().let { doc ->
@@ -642,7 +675,7 @@ class BiliNovel : HttpSource(), ConfigurableSource {
         val switch = pref.getBoolean(PREF_DISPLAY_TRADITIONAL, false)
         val title = doc.selectFirst("#atitle")?.html()?.takeIf { it.indexOf("/") < 0 } ?: ""
         val content = doc.selectFirst("#acontent")!!
-        val chapterId = CHAPTER_ID_REGEX.find(doc.location())!!.groups[2]!!.value.toInt()
+        val chapterId = CHAPTER_IDS_REGEX.find(doc.location())!!.groups[2]!!.value.toInt()
         TextInterceptor.createUrl(
             title.convert(switch),
             sort(content, chapterId).convert(switch),
