@@ -5,7 +5,7 @@ import androidx.preference.PreferenceScreen
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.network.await
 import eu.kanade.tachiyomi.network.awaitSuccess
-import eu.kanade.tachiyomi.network.interceptor.rateLimit
+import eu.kanade.tachiyomi.network.interceptor.rateLimitHost
 import eu.kanade.tachiyomi.source.ConfigurableSource
 import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.MangasPage
@@ -62,8 +62,8 @@ class BiliNovel : HttpSource(), ConfigurableSource, ResolvableSource {
 
     override val client = super.client.newBuilder()
         .addInterceptor(TextInterceptor(baseUrl, pref)).also {
-            val split = pref.getString(PREF_RATE_LIMIT, "10/10")!!.split("/")
-            it.rateLimit(split[0].toInt(), split[1].toInt().seconds)
+            val s = pref.getString(PREF_RATE_LIMIT, "10/10")!!.split("/")
+            it.rateLimitHost(baseUrl.toHttpUrl(), s[0].toInt(), s[1].toInt().seconds)
         }.addNetworkInterceptor(ChapterInterceptor()).build()
 
     override fun headersBuilder() = super.headersBuilder()
