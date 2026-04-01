@@ -143,7 +143,7 @@ fun preferencesInternal(context: Context, pref: SharedPreferences): Array<Prefer
         SwitchPreferenceCompat(context).apply {
             key = PREF_AUTO_BOOKMARK
             title = "自动标记书签（源站功能）"
-            summary = "阅读任一章节时，自动调用源站的“书签”功能标记该章节（不建议下载后阅读，会导致超前标记）\n注：需在 WebView 中登录，否则将自动关闭"
+            summary = "阅读任一章节时，自动调用源站的“书签”功能标记该章节（不建议将章节下载后阅读，会导致超前标记）\n注：该设置需在 WebView 中登录，否则将自动关闭"
             setDefaultValue(false)
             setOnPreferenceChangeListener { _, newVal ->
                 if (newVal as Boolean) {

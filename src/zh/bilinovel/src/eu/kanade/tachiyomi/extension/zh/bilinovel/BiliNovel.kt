@@ -16,6 +16,8 @@ import eu.kanade.tachiyomi.source.online.HttpSource
 import eu.kanade.tachiyomi.source.online.ResolvableSource
 import eu.kanade.tachiyomi.source.online.UriType
 import eu.kanade.tachiyomi.util.asJsoup
+import eu.kanade.tachiyomi.util.selectInt
+import eu.kanade.tachiyomi.util.selectText
 import keiyoushi.utils.getPreferencesLazy
 import keiyoushi.utils.tryParse
 import kotlinx.coroutines.CoroutineScope
@@ -426,13 +428,11 @@ class BiliNovel : HttpSource(), ConfigurableSource, ResolvableSource {
         val url = doc.location()
         return when {
             url.contains("wenku") -> {
-                val total = doc.selectFirst("#pagelink > .last")!!.text().toInt()
-                val cur = doc.selectFirst("#pagelink > strong")!!.text().toInt()
-                cur < total
+                doc.selectInt("#pagelink > strong") < doc.selectInt("#pagelink > .last")
             }
 
             url.contains("search") -> {
-                val find = PAGE_REGEX.find(doc.selectFirst("#pagelink > span")!!.text())!!
+                val find = PAGE_REGEX.find(doc.selectText("#pagelink > span")!!)!!
                 find.groups[1]!!.value.toInt() < find.groups[1]!!.value.toInt()
             }
 
@@ -594,13 +594,13 @@ class BiliNovel : HttpSource(), ConfigurableSource, ResolvableSource {
         val notice = doc.selectFirst(".notice")?.takeIf { pref.getBoolean(PREF_NOTICE, true) }
             ?.let { "> ${it.formatText("\n")}\n\n" }?.replace(URL_REGEX, "<$0>") ?: ""
         val desc = doc.selectFirst("#bookSummary > content")!!.formatText("\n\n\n")
-        val bkname = doc.selectFirst(".bkname-body")?.let { "\n\n\n**別名**：${it.text()}" } ?: ""
+        val bkname = doc.selectFirst(".bkname-body")?.let { "\n\n\n***别名**：${it.text()}* " } ?: ""
         setUrlWithoutDomain(doc.location())
-        title = doc.selectFirst(".book-title")!!.text().convert(switch)
+        title = doc.selectText(".book-title")!!.convert(switch)
         thumbnail_url = doc.selectFirst(".book-cover")!!.attr("src")
         description = "$notice$desc$bkname".convert(switch)
-        author = doc.selectFirst(".authorname")?.text()?.convert(switch)
-        artist = doc.selectFirst(".illname")?.text()?.substringBefore('(')?.convert(switch)
+        author = doc.selectText(".authorname")?.convert(switch)
+        artist = doc.selectText(".illname")?.substringBefore('(')?.convert(switch)
         status = when (meta.getOrNull(1)) {
             "连载", "連載" -> SManga.ONGOING
             "完结", "完結" -> SManga.COMPLETED
@@ -617,11 +617,11 @@ class BiliNovel : HttpSource(), ConfigurableSource, ResolvableSource {
 
     override fun chapterListParse(response: Response) = response.asJsoup().let { resp ->
         val switch = pref.getBoolean(PREF_DISPLAY_TRADITIONAL, false)
-        val info = resp.selectFirst(".chapter-sub-title")!!.text()
-        val title = resp.selectFirst(".book-title")!!.text()
+        val info = resp.selectText(".chapter-sub-title")!!
+        val title = resp.selectText(".book-title")!!
         val date = DATE_FORMAT.tryParse(DATE_REGEX.find(info)?.value)
         resp.select(".catalog-volume").takeIf(Elements::isNotEmpty)?.flatMap {
-            val bar = it.selectFirst(".chapter-bar")!!.text().substring(title.length + 1)
+            val bar = it.selectText(".chapter-bar")!!.substring(title.length + 1)
             val volume = if (bar.first().isDigit()) "Vol.$bar" else bar.toHalfWidthDigits()
             // val volume = NUM_REGEX.matchEntire(bar.substringBefore("（"))
             //     ?.let { r -> "第 ${r.value} 卷" + bar.substringAfter(r.value) }
@@ -641,7 +641,7 @@ class BiliNovel : HttpSource(), ConfigurableSource, ResolvableSource {
 
     override fun pageListParse(response: Response) = response.asJsoup().let { doc ->
         doc.selectFirst("#acontent > .center-note")?.run { throw Exception(text()) }
-        val size = PAGE_SIZE_REGEX.find(doc.selectFirst("#atitle")!!.text())!!.groups[1]!!.value
+        val size = PAGE_SIZE_REGEX.find(doc.selectText("#atitle")!!)!!.groups[1]!!.value
         val prefix = doc.location().substringBeforeLast("_")
         List(size.toInt().takeUnless { it == 0 } ?: 1) { i ->
             Page(i, prefix + "${if (i > 0) "_${i + 1}" else ""}.html")

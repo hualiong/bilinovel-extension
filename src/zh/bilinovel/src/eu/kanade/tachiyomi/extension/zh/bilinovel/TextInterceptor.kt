@@ -27,7 +27,7 @@ import okhttp3.Response
 import okhttp3.ResponseBody.Companion.toResponseBody
 import java.io.ByteArrayOutputStream
 import java.net.URL
-import java.util.concurrent.ConcurrentHashMap
+import java.util.HashMap
 import java.util.concurrent.TimeUnit
 
 class TextInterceptor(
@@ -94,18 +94,18 @@ class TextInterceptor(
         val body = url.pathSegments[1].takeIf { it.isNotEmpty() }?.let {
             // 处理HTML内容并预加载所有图片
             val imageUrls = extractImageUrls(it)
-            val imageBuffer = ConcurrentHashMap<String, Drawable>()
+            val imageBuffer = HashMap<String, Drawable>()
 
             if (imageUrls.isNotEmpty()) {
                 // 使用协程并发加载图片，并等待完成（最多30秒）
                 runBlocking(Dispatchers.IO) {
                     val deferredImages = imageUrls.map { url ->
                         async {
-                            try {
+                            runCatching {
                                 // 加载图片，失败时返回占位符
                                 loadImage(url) ?: createPlaceholder()
-                            } catch (e: Exception) {
-                                Log.w("HtmlInterceptor", "Failed to load image: $url", e)
+                            }.getOrElse { e ->
+                                Log.w("TextInterceptor", "Failed to load image: $url", e)
                                 createPlaceholder()
                             }
                         }
@@ -118,7 +118,7 @@ class TextInterceptor(
                         }
                     } ?: run {
                         // 超时处理：已加载的图片保留，未加载的用占位符
-                        Log.w("HtmlInterceptor", "Timeout waiting for images to load")
+                        Log.w("TextInterceptor", "Timeout waiting for images to load")
                         deferredImages.forEachIndexed { index, deferred ->
                             if (!deferred.isCompleted) {
                                 deferred.cancel()
@@ -197,10 +197,8 @@ class TextInterceptor(
             connectTimeout = 10000
             readTimeout = 10000
         }
-        return try {
-            val inputStream = connection.getInputStream()
-            val bitmap = BitmapFactory.decodeStream(inputStream)
-            inputStream.close()
+        return runCatching {
+            val bitmap = connection.getInputStream().use(BitmapFactory::decodeStream)
 
             // 计算适合文本宽度的图片尺寸
             val scaledWidth = WIDTH - (2 * X_PADDING).toInt()
@@ -211,9 +209,7 @@ class TextInterceptor(
             BitmapDrawable(null, scaledBitmap).apply {
                 setBounds(0, 0, scaledWidth, scaledHeight)
             }
-        } catch (_: Exception) {
-            null
-        }
+        }.getOrNull()
     }
 
     /**

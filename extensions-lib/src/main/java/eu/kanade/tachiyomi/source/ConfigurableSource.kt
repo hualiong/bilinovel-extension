@@ -14,3 +14,10 @@ interface ConfigurableSource : Source {
 
     fun setupPreferenceScreen(screen: PreferenceScreen)
 }
+
+@Suppress("unused")
+fun ConfigurableSource.preferenceKey(): String = "source_$id"
+
+// TODO: use getSourcePreferences once all extensions are on ext-lib 1.5
+@Suppress("unused")
+fun ConfigurableSource.sourcePreferences(): SharedPreferences = throw Exception("Stub!")

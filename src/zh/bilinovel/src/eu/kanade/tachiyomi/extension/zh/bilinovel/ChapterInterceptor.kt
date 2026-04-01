@@ -24,12 +24,10 @@ class ChapterInterceptor : Interceptor {
             val groups = CHAPTER_ID_REGEX.find(url.toString())?.groups
             "/novel/${groups?.get(1)?.value}/${groups?.get(2)?.value?.toInt()?.plus(1)}.html"
         }
-
         "next" -> {
             val groups = CHAPTER_ID_REGEX.find(url.toString())?.groups
             "/novel/${groups?.get(1)?.value}/${groups?.get(2)?.value?.toInt()?.minus(1)}.html"
         }
-
         else -> "/novel/0/0.html"
     }
 

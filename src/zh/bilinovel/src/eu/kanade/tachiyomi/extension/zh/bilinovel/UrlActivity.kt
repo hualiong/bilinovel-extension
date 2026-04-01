@@ -25,9 +25,6 @@ class UrlActivity : Activity() {
         } catch (e: ActivityNotFoundException) {
             Log.e("BiliNovelUrlActivity", "Mihon not installed", e)
             Toast.makeText(this, "Mihon未安装", Toast.LENGTH_SHORT).show()
-        } catch (e: Exception) {
-            Log.e("BiliNovelUrlActivity", "Failed to handle URL: $uri", e)
-            Toast.makeText(this, "无法解析该URL", Toast.LENGTH_SHORT).show()
         } finally {
             finish()
             exitProcess(0)
