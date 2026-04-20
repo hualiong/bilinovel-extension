@@ -1,6 +1,7 @@
 package eu.kanade.tachiyomi.extension.zh.bilinovel
 
 import android.util.Log
+import androidx.preference.EditTextPreference
 import androidx.preference.PreferenceScreen
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.network.await
@@ -32,6 +33,7 @@ import org.jsoup.nodes.Element
 import org.jsoup.select.Elements
 import java.text.SimpleDateFormat
 import java.util.Locale
+import java.util.TimeZone
 import kotlin.math.floor
 import kotlin.time.Duration.Companion.seconds
 
@@ -41,27 +43,25 @@ class BiliNovel : HttpSource(), ConfigurableSource, ResolvableSource {
     override val name = "哔哩轻小说"
     override val supportsLatest = true
 
-    private val pref by getPreferencesLazy {
-        getString(PREF_SCREEN_BG_COLOR, null)?.let {
-            val color = getString(PREF_SCREEN_FONT_COLOR, "#000000")
-            edit().putString(PREF_SCREEN_COLORS, "$it $color")
-                .remove(PREF_SCREEN_BG_COLOR)
-                .remove(PREF_SCREEN_FONT_COLOR).apply()
-        }
-        getString(PREF_HEADING_FONT_SIZE, null)?.let {
-            val size = getString(PREF_BODY_FONT_SIZE, "30")
-            edit().putString(PREF_SCREEN_FONT_SIZE, "$it $size")
-                .remove(PREF_HEADING_FONT_SIZE)
-                .remove(PREF_BODY_FONT_SIZE).apply()
-        }
-    }
+    private val pref by getPreferencesLazy()
+    private var chapterlog: String? = null
+    private val textInterceptor = TextInterceptor(super.client, baseUrl, pref)
 
     override fun setupPreferenceScreen(screen: PreferenceScreen) {
         preferencesInternal(screen.context, pref).forEach(screen::addPreference)
+        screen.addPreference(
+            EditTextPreference(screen.context).apply {
+                key = "CHAPTER_LOG"
+                title = "chapterlog 版本"
+                summary = chapterlog ?: "待获取..."
+                dialogMessage = "该项仅作为调试信息，无实际用途"
+                setDefaultValue("在这填啥都没用")
+            },
+        )
     }
 
     override val client = super.client.newBuilder()
-        .addInterceptor(TextInterceptor(baseUrl, pref)).also {
+        .addInterceptor(textInterceptor).also {
             val s = pref.getString(PREF_RATE_LIMIT, "10/10")!!.split("/")
             it.rateLimitHost(baseUrl.toHttpUrl(), s[0].toInt(), s[1].toInt().seconds)
         }.addNetworkInterceptor(ChapterInterceptor()).build()
@@ -77,15 +77,20 @@ class BiliNovel : HttpSource(), ConfigurableSource, ResolvableSource {
         const val BOOKMARK_URL = "%s/modules/article/addbookcase.php?bid=%s&cid=%s&pid=1&ajax_request=1"
         val DATE_REGEX = Regex("\\d{4}-\\d{1,2}-\\d{1,2}")
         val PAGE_REGEX = Regex("第(\\d+)/(\\d+)页")
-        val MANGA_ID_REGEX = Regex("/novel/(\\d+)\\.html")
-        val CHAPTER_IDS_REGEX = Regex("/novel/(\\d+)/(\\d+)(?:_\\d+)?\\.html")
+        val NOVEL_ID_REGEX = Regex("/novel/(\\d+)\\.html")
+        val CHAPTER_IDS_REGEX = Regex("/novel/(\\d+)/(\\d+)(?:_(\\d+))?\\.html")
         val PAGE_SIZE_REGEX = Regex("（\\d+/(\\d+)）")
         val EXPRESSION_REGEX = Regex("Number.*?;")
         val SALT_REGEX = Regex("(?<![a-zA-Z0-9_])-?0x[0-9a-fA-F]+(?:[+*\\-]-?0x[0-9a-fA-F]+)+")
         val CHAPTERLOG_REGEX = Regex("/themes/zhmb/js/chapterlog\\.js\\?v[^\"]+")
-        val URL_REGEX = Regex("https?://(?:www\\.)?([-a-zA-Z0-9@:%._+~#=]{2,256}\\.[a-z]{2,6}\\b)*(/[/\\w.-]*)*[?]*(.+)*", RegexOption.IGNORE_CASE)
+        val URL_REGEX = Regex("https?://(www\\.)?[-a-zA-Z0-9@:%._+~#=]{1,256}\\.[a-zA-Z0-9()]{1,6}\\b([-a-zA-Z0-9()!@:%_+.~#?&/=]*)")
         val NEWLINE_REGEX = Regex("(?:\n\r\n)+")
-        val DATE_FORMAT = SimpleDateFormat("yyyy-MM-dd", Locale.CHINESE)
+        val DATE_FORMAT = SimpleDateFormat("yyyy-MM-dd", Locale.ENGLISH).apply {
+            timeZone = TimeZone.getTimeZone("UTC+8")
+        }
+        val DATETIME_FORMAT = SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss z", Locale.ENGLISH).apply {
+            timeZone = TimeZone.getTimeZone("UTC")
+        }
         val TRADITIONAL_CHARACTER_MAP = mapOf(
             '皑' to '皚', '蔼' to '藹', '碍' to '礙', '爱' to '愛', '翱' to '翺', '袄' to '襖',
             '奥' to '奧', '坝' to '壩', '罢' to '罷', '摆' to '擺', '败' to '敗', '颁' to '頒',
@@ -308,17 +313,14 @@ class BiliNovel : HttpSource(), ConfigurableSource, ResolvableSource {
     }
 
     private var salt: Pair<Int, Int>? = null
-    private val SManga.id get() = MANGA_ID_REGEX.find(url)!!.groups[1]!!.value
-    private val Page.ids get() = CHAPTER_IDS_REGEX.find(url)!!.groups.drop(1).map { it!!.value }
+    private val SManga.id get() = NOVEL_ID_REGEX.find(url)!!.groups[1]!!.value
+    private val Page.ids get() = CHAPTER_IDS_REGEX.find(url)!!.groups.drop(1).map { it?.value }
     private fun String.toHalfWidthDigits(): String {
         return this.map { if (it in '０'..'９') it - 65248 else it }.joinToString("")
     }
 
     private fun String.convert(
-        switch: Boolean = pref.getBoolean(
-            PREF_DISPLAY_TRADITIONAL,
-            false,
-        ),
+        switch: Boolean = pref.getBoolean(PREF_DISPLAY_TRADITIONAL, false),
     ): String {
         return if (switch) {
             this.map { c -> TRADITIONAL_CHARACTER_MAP[c] ?: c }.joinToString("")
@@ -340,10 +342,14 @@ class BiliNovel : HttpSource(), ConfigurableSource, ResolvableSource {
             }
         }
 
-    private fun parseSalt(url: String) {
+    private suspend fun parseSalt(path: String) {
         var s1 = 0
         var s2 = 0
-        val resp = client.newCall(GET(url, headers)).execute()
+        val resp = client.newCall(GET(baseUrl + path, headers)).awaitSuccess()
+        val date = resp.headers["Last-Modified"]?.let {
+            pref.edit().putString("CHAPTER_LOG", it).apply()
+            DATE_FORMAT.format(DATETIME_FORMAT.parse(it)!!)
+        } ?: "无法获取修改日期"
         EXPRESSION_REGEX.findAll(resp.body.string()).forEach { m ->
             SALT_REGEX.findAll(m.value).takeIf { it.count() == 2 }
                 ?.map { calculate(it.value) }
@@ -353,7 +359,8 @@ class BiliNovel : HttpSource(), ConfigurableSource, ResolvableSource {
                 }
         }
         salt = Pair(s1, s2).apply {
-            val version = url.substringAfter("?")
+            val version = path.substringAfter("?")
+            chapterlog = "$version  |  $date"
             Log.v("BiliNovel", "chapterlog: $version, salt1: $first, salt2: $second")
         }
     }
@@ -430,12 +437,10 @@ class BiliNovel : HttpSource(), ConfigurableSource, ResolvableSource {
             url.contains("wenku") -> {
                 doc.selectInt("#pagelink > strong") < doc.selectInt("#pagelink > .last")
             }
-
             url.contains("search") -> {
                 val find = PAGE_REGEX.find(doc.selectText("#pagelink > span")!!)!!
                 find.groups[1]!!.value.toInt() < find.groups[1]!!.value.toInt()
             }
-
             else -> size == 50
         }
     }
@@ -509,7 +514,7 @@ class BiliNovel : HttpSource(), ConfigurableSource, ResolvableSource {
         val url = runCatching { uri.toHttpUrl() }.getOrNull() ?: return UriType.Unknown
         val uriType = when {
             !url.host.endsWith("bilinovel.com") && !url.host.endsWith("linovelib.com") -> UriType.Unknown
-            MANGA_ID_REGEX.matches(url.encodedPath) -> UriType.Manga
+            NOVEL_ID_REGEX.matches(url.encodedPath) -> UriType.Manga
             CHAPTER_IDS_REGEX.matches(url.encodedPath) -> UriType.Chapter
             else -> UriType.Unknown
         }
@@ -518,7 +523,7 @@ class BiliNovel : HttpSource(), ConfigurableSource, ResolvableSource {
 
     override suspend fun getManga(uri: String): SManga? {
         val httpUrl = uri.toHttpUrl()
-        val url = if (MANGA_ID_REGEX.matches(httpUrl.encodedPath)) {
+        val url = if (NOVEL_ID_REGEX.matches(httpUrl.encodedPath)) {
             httpUrl.encodedPath
         } else {
             val mangaId = CHAPTER_IDS_REGEX.find(httpUrl.encodedPath)!!.groups[1]!!.value
@@ -567,6 +572,7 @@ class BiliNovel : HttpSource(), ConfigurableSource, ResolvableSource {
     override fun getFilterList() = buildFilterList()
 
     override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
+        if (NOVEL_ID_REGEX.matches(query.toHttpUrl().encodedPath)) return GET(query, headers)
         val url = baseUrl.toHttpUrl().newBuilder()
         if (query.isNotBlank()) {
             url.addPathSegment("search").addPathSegment("${query}_$page.html")
@@ -632,12 +638,14 @@ class BiliNovel : HttpSource(), ConfigurableSource, ResolvableSource {
 
     // Manga View Page
 
-    override fun pageListRequest(chapter: SChapter) = GET(
-        url = baseUrl + chapter.url.let {
-            if (it.contains("#")) it else it.replace(".", "_2.")
-        },
-        headers = headers,
-    )
+    override fun pageListRequest(chapter: SChapter): Request {
+        return GET(
+            url = baseUrl + chapter.url.let {
+                if (it.contains("#")) it else it.replace(".", "_2.")
+            },
+            headers = headers,
+        )
+    }
 
     override fun pageListParse(response: Response) = response.asJsoup().let { doc ->
         doc.selectFirst("#acontent > .center-note")?.run { throw Exception(text()) }
@@ -651,34 +659,42 @@ class BiliNovel : HttpSource(), ConfigurableSource, ResolvableSource {
     // Image
 
     override suspend fun getImageUrl(page: Page): String {
-        if (!page.url.contains('_') && pref.getBoolean(PREF_AUTO_BOOKMARK, false)) {
-            val ids = page.ids
-            val apiUrl = BOOKMARK_URL.format(baseUrl, ids[0], ids[1])
-            CoroutineScope(currentCoroutineContext()).launch(Dispatchers.IO) {
-                try {
-                    val response = client.newCall(GET(apiUrl, headers)).awaitSuccess()
-                    if (response.body.string().startsWith("对不起")) {
+        val ids = page.ids
+        if (!page.url.contains('_')) { // 只在第一页，请求书签API
+            if (pref.getBoolean(PREF_LOAD_ALL_IMAGES, false)) {
+                textInterceptor.clean(ids[1]!!)
+            }
+            if (pref.getBoolean(PREF_AUTO_BOOKMARK, false)) {
+                val apiUrl = BOOKMARK_URL.format(baseUrl, ids[0], ids[1])
+                CoroutineScope(currentCoroutineContext()).launch(Dispatchers.IO) {
+                    try {
+                        val response = client.newCall(GET(apiUrl, headers)).awaitSuccess()
+                        if (response.body.string().startsWith("对不起")) {
+                            pref.edit().putBoolean(PREF_AUTO_BOOKMARK, false).apply()
+                        }
+                    } catch (e: Exception) {
                         pref.edit().putBoolean(PREF_AUTO_BOOKMARK, false).apply()
+                        Log.e("BiliNovel", e.message ?: e.javaClass.name)
                     }
-                } catch (e: Exception) {
-                    pref.edit().putBoolean(PREF_AUTO_BOOKMARK, false).apply()
-                    Log.e("BiliNovel", e.message ?: e.javaClass.name)
                 }
             }
         }
         val response = client.newCall(imageUrlRequest(page)).awaitSuccess()
-        return imageUrlParse(response)
+        return imageUrlParse(response, "${ids[1]}-${ids[2] ?: "1"}")
     }
 
-    override fun imageUrlParse(response: Response) = response.asJsoup().let { doc ->
-        if (salt == null) parseSalt(baseUrl + CHAPTERLOG_REGEX.find(doc.body().toString())!!.value)
+    private suspend fun imageUrlParse(resp: Response, key: String) = resp.asJsoup().let { doc ->
+        if (salt == null) parseSalt(CHAPTERLOG_REGEX.find(doc.body().toString())!!.value)
         val switch = pref.getBoolean(PREF_DISPLAY_TRADITIONAL, false)
         val title = doc.selectFirst("#atitle")?.html()?.takeIf { it.indexOf("/") < 0 } ?: ""
         val content = doc.selectFirst("#acontent")!!
         val chapterId = CHAPTER_IDS_REGEX.find(doc.location())!!.groups[2]!!.value.toInt()
         TextInterceptor.createUrl(
+            key,
             title.convert(switch),
             sort(content, chapterId).convert(switch),
         )
     }
+
+    override fun imageUrlParse(response: Response) = throw UnsupportedOperationException()
 }

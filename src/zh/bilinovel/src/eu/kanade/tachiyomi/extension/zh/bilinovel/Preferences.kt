@@ -8,12 +8,6 @@ import androidx.preference.ListPreference
 import androidx.preference.Preference
 import androidx.preference.SwitchPreferenceCompat
 
-// Deprecated
-const val PREF_SCREEN_BG_COLOR = "SCREEN_BG_COLOR"
-const val PREF_SCREEN_FONT_COLOR = "FONT_COLOR"
-const val PREF_HEADING_FONT_SIZE = "HEADING_FONT_SIZE"
-const val PREF_BODY_FONT_SIZE = "BODY_FONT_SIZE"
-
 const val PREF_POPULAR_DISPLAY = "POPULAR_DISPLAY"
 const val PREF_SCREEN_COLORS = "SCREEN_COLORS"
 const val PREF_SCREEN_FONT_SIZE = "SCREEN_FONT_SIZE"
@@ -22,6 +16,8 @@ const val PREF_DARK_MODE = "DARK_MODE"
 const val PREF_RATE_LIMIT = "RATE_LIMIT"
 const val PREF_AUTO_BOOKMARK = "AUTO_BOOKMARK"
 const val PREF_NOTICE = "NOTICE"
+const val PREF_LOAD_ALL_IMAGES = "LOAD_ALL_IMAGES"
+const val PREF_HTTP = "HTTP"
 
 val RGB_REGEX = Regex("^#[0-9A-F]{6} #[0-9A-F]{6}$", RegexOption.IGNORE_CASE)
 val FONT_SIZE_REGEX = Regex("^(?:\\d+|\\d+\\.\\d+) (?:\\d+|\\d+\\.\\d+)$")
@@ -127,7 +123,7 @@ fun preferencesInternal(context: Context, pref: SharedPreferences): Array<Prefer
         SwitchPreferenceCompat(context).apply {
             key = PREF_DARK_MODE
             title = "深色模式"
-            summary = "开启后，阅读页面的样式将强制使用黑底白字"
+            summary = "阅读页面的样式将强制使用黑底白字"
             setDefaultValue(false)
             setOnPreferenceChangeListener { _, _ ->
                 Toast.makeText(context, "已加载章节需清除章节缓存后生效", Toast.LENGTH_LONG).show()
@@ -141,9 +137,21 @@ fun preferencesInternal(context: Context, pref: SharedPreferences): Array<Prefer
             setDefaultValue(true)
         },
         SwitchPreferenceCompat(context).apply {
+            key = PREF_LOAD_ALL_IMAGES
+            title = "确保加载所有插图"
+            summary = "一旦有插图加载失败，不再用空白图占位，而是可以进行重试，直到加载完所有插图"
+            setDefaultValue(false)
+        },
+        SwitchPreferenceCompat(context).apply {
+            key = PREF_HTTP
+            title = "使用旧版插图请求方式"
+            summary = "如果频繁遇到大量插图加载失败或一半模糊，可尝试开启该项（纯网络问题的话，那就没啥用了）"
+            setDefaultValue(false)
+        },
+        SwitchPreferenceCompat(context).apply {
             key = PREF_AUTO_BOOKMARK
             title = "自动标记书签（源站功能）"
-            summary = "阅读任一章节时，自动调用源站的“书签”功能标记该章节（不建议将章节下载后阅读，会导致超前标记）\n注：该设置需在 WebView 中登录，否则将自动关闭"
+            summary = "阅读任一章节时，自动调用源站的“书签”功能标记该章节（不建议将章节下载后阅读，会导致超前标记）\n注：该功能需在 WebView 中登录，否则将自动关闭"
             setDefaultValue(false)
             setOnPreferenceChangeListener { _, newVal ->
                 if (newVal as Boolean) {

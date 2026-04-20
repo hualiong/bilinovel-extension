@@ -14,23 +14,28 @@ import android.text.Html
 import android.text.Layout
 import android.text.StaticLayout
 import android.text.TextPaint
-import android.util.Log
+import eu.kanade.tachiyomi.network.GET
+import eu.kanade.tachiyomi.network.awaitSuccess
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.withContext
+import okhttp3.Headers
 import okhttp3.Interceptor
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
 import okhttp3.Protocol
 import okhttp3.Response
 import okhttp3.ResponseBody.Companion.toResponseBody
 import java.io.ByteArrayOutputStream
+import java.io.IOException
 import java.net.URL
-import java.util.HashMap
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 
 class TextInterceptor(
+    client: OkHttpClient,
     private val baseUrl: String,
     private val pref: SharedPreferences,
 ) : Interceptor {
@@ -40,15 +45,27 @@ class TextInterceptor(
         private const val WIDTH: Int = 1000
         private const val X_PADDING: Float = 50f
         private const val Y_PADDING: Float = 30f
+        private const val CONTENT_WIDTH: Int = (WIDTH - 2 * X_PADDING).toInt()
         private const val SPACING_MULT: Float = 1.0f
         private const val SPACING_ADD: Float = 10f
         private const val DIVIDER_HEIGHT: Float = 2f
         private const val DIVIDER_MARGIN: Float = 30f
         val URL_REGEX = Regex("""<img[^>]+src\s*=\s*["']([^"']+)["'][^>]*>""")
         val DIVIDER_COLOR = Color.parseColor("#E0E0E0")
-        fun createUrl(title: String, text: String): String {
-            return "http://$HOST/" + Uri.encode(title) + "/" + Uri.encode(text)
+        fun createUrl(key: String, title: String, text: String): String {
+            return "http://$HOST/${Uri.encode(key)}/${Uri.encode(title)}/${Uri.encode(text)}"
         }
+    }
+
+    private val imageCache by lazy { ConcurrentHashMap<String, HashMap<String, Drawable>>() }
+
+    private val headers by lazy { Headers.Builder().add("Referer", baseUrl).build() }
+
+    private val client by lazy {
+        client.newBuilder().protocols(listOf(Protocol.HTTP_1_1))
+            .connectTimeout(15, TimeUnit.SECONDS)
+            .readTimeout(15, TimeUnit.SECONDS).build()
+        // .callTimeout(1, TimeUnit.MINUTES).build()
     }
 
     override fun intercept(chain: Interceptor.Chain): Response {
@@ -82,61 +99,28 @@ class TextInterceptor(
             isAntiAlias = true
         }
 
-        val heading = url.pathSegments[0].takeIf { it.isNotEmpty() }?.let {
-            val title = Html.fromHtml(url.pathSegments[0], Html.FROM_HTML_MODE_LEGACY).toString()
-            StaticLayout.Builder.obtain(title, 0, title.length, paintHeading, (WIDTH - 2 * X_PADDING).toInt())
+        val heading = url.pathSegments[1].takeIf { it.isNotEmpty() }?.let {
+            val title = Html.fromHtml(it, Html.FROM_HTML_MODE_LEGACY).toString()
+            StaticLayout.Builder.obtain(title, 0, title.length, paintHeading, CONTENT_WIDTH)
                 .setAlignment(Layout.Alignment.ALIGN_CENTER)
-                .setLineSpacing(SPACING_ADD, SPACING_MULT) // 注意参数顺序：add, mult
+                .setLineSpacing(SPACING_ADD, SPACING_MULT)
                 .setIncludePad(false)
                 .build()
         }
 
-        val body = url.pathSegments[1].takeIf { it.isNotEmpty() }?.let {
-            // 处理HTML内容并预加载所有图片
-            val imageUrls = extractImageUrls(it)
-            val imageBuffer = HashMap<String, Drawable>()
-
-            if (imageUrls.isNotEmpty()) {
-                // 使用协程并发加载图片，并等待完成（最多30秒）
-                runBlocking(Dispatchers.IO) {
-                    val deferredImages = imageUrls.map { url ->
-                        async {
-                            runCatching {
-                                // 加载图片，失败时返回占位符
-                                loadImage(url) ?: createPlaceholder()
-                            }.getOrElse { e ->
-                                Log.w("TextInterceptor", "Failed to load image: $url", e)
-                                createPlaceholder()
-                            }
-                        }
-                    }
-
-                    // 等待所有图片加载完成，设置超时30秒
-                    withTimeoutOrNull(TimeUnit.SECONDS.toMillis(30)) {
-                        deferredImages.awaitAll().forEachIndexed { index, drawable ->
-                            imageBuffer[imageUrls[index]] = drawable
-                        }
-                    } ?: run {
-                        // 超时处理：已加载的图片保留，未加载的用占位符
-                        Log.w("TextInterceptor", "Timeout waiting for images to load")
-                        deferredImages.forEachIndexed { index, deferred ->
-                            if (!deferred.isCompleted) {
-                                deferred.cancel()
-                                imageBuffer[imageUrls[index]] = createPlaceholder()
-                            }
-                        }
-                    }
-                }
+        val body = url.pathSegments[2].takeIf { it.isNotEmpty() }?.let {
+            val images = if (pref.getBoolean(PREF_LOAD_ALL_IMAGES, false)) {
+                loadImagesWithCache(it, url.pathSegments[0])
+            } else {
+                loadImages(it)
             }
-
             val spanned = Html.fromHtml(
                 it,
                 Html.FROM_HTML_MODE_LEGACY,
-                { src -> imageBuffer.getOrDefault(src, createPlaceholder()) },
+                { src -> images.getOrDefault(src, createPlaceholder()) },
                 null,
             )
-
-            StaticLayout.Builder.obtain(spanned, 0, spanned.length, paintBody, (WIDTH - 2 * X_PADDING).toInt())
+            StaticLayout.Builder.obtain(spanned, 0, spanned.length, paintBody, CONTENT_WIDTH)
                 .setAlignment(Layout.Alignment.ALIGN_NORMAL)
                 .setLineSpacing(SPACING_ADD, SPACING_MULT)
                 .setIncludePad(false)
@@ -170,13 +154,63 @@ class TextInterceptor(
         val stream = ByteArrayOutputStream()
         bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream)
         val responseBody = stream.toByteArray().toResponseBody("image/png".toMediaType())
-        return Response.Builder()
-            .request(request)
-            .protocol(Protocol.HTTP_1_1)
-            .code(200)
-            .message("OK")
-            .body(responseBody)
-            .build()
+        return Response.Builder().request(request).code(200).message("OK").body(responseBody)
+            .protocol(Protocol.HTTP_1_1).build()
+    }
+
+    private fun loadImages(html: String): Map<String, Drawable> {
+        val imageUrls = extractImageUrls(html)
+        val imageBuffer = HashMap<String, Drawable>()
+
+        if (imageUrls.isNotEmpty()) {
+            runBlocking(Dispatchers.IO) {
+                val deferredImages = imageUrls.map { url ->
+                    async { runCatching { loadImage(url) }.getOrElse(::createPlaceholder) }
+                }
+                deferredImages.awaitAll().forEachIndexed { i, drawable ->
+                    imageBuffer[imageUrls[i]] = drawable
+                }
+            }
+        }
+        return imageBuffer
+    }
+
+    /**
+     * 新方法：带缓存的严格加载，任何图片加载失败则抛出 IOException，
+     * 并将已成功加载的图片存入缓存供重试时复用。
+     */
+    private fun loadImagesWithCache(html: String, key: String): Map<String, Drawable> {
+        val imageUrls = extractImageUrls(html)
+        val imageBuffer = HashMap<String, Drawable>()
+        if (imageUrls.isEmpty()) return imageBuffer
+
+        // 获取或创建本次会话的缓存 Map
+        val cache = imageCache.getOrPut(key) { HashMap() }
+
+        // 分离已缓存和未缓存的 URL
+        val toLoad = mutableListOf<String>()
+        imageUrls.forEach { url -> cache[url]?.let { imageBuffer[url] = it } ?: toLoad.add(url) }
+
+        if (toLoad.isNotEmpty()) {
+            runBlocking(Dispatchers.IO) {
+                val deferredImages = toLoad.map { url -> async { runCatching { loadImage(url) } } }
+                var count = 0
+                var message: String? = null
+                deferredImages.awaitAll().forEachIndexed { idx, result ->
+                    val url = toLoad[idx]
+                    result.onSuccess { drawable ->
+                        imageBuffer[url] = drawable
+                        cache[url] = drawable
+                    }.onFailure { e ->
+                        count++
+                        message = e.message
+                    }
+                }
+                if (count > 0) throw IOException("$count / ${imageUrls.size} 张插图加载失败，请重试！\n$message")
+            }
+        }
+        imageCache.remove(key)
+        return imageBuffer
     }
 
     /**
@@ -188,34 +222,41 @@ class TextInterceptor(
     }
 
     /**
-     * 加载单个图片（可空返回，用于协程异常处理）
+     * 加载单个图片
      */
-    private fun loadImage(url: String): Drawable? {
-        val raw = if (url.startsWith("//")) URL("https:$url") else URL(url)
-        val connection = raw.openConnection().apply {
-            setRequestProperty("Referer", baseUrl)
-            connectTimeout = 10000
-            readTimeout = 10000
+    private suspend fun loadImage(url: String): Drawable {
+        val raw = if (url.startsWith("//")) "https:$url" else url
+        val bitmap = if (pref.getBoolean(PREF_HTTP, false)) {
+            withContext(Dispatchers.IO) {
+                URL(raw).openConnection().apply {
+                    setRequestProperty("Referer", baseUrl)
+                    connectTimeout = 15000
+                    readTimeout = 15000
+                }.getInputStream()
+            }.use(BitmapFactory::decodeStream)
+        } else {
+            val response = client.newCall(GET(raw, headers)).awaitSuccess()
+            response.body.use { it.byteStream().use(BitmapFactory::decodeStream) }
         }
-        return runCatching {
-            val bitmap = connection.getInputStream().use(BitmapFactory::decodeStream)
 
-            // 计算适合文本宽度的图片尺寸
-            val scaledWidth = WIDTH - (2 * X_PADDING).toInt()
-            val scaleFactor = scaledWidth.toFloat() / bitmap.width
-            val scaledHeight = (bitmap.height * scaleFactor).toInt()
+        checkNotNull(bitmap) { throw IOException("位图解码出错") }
 
-            val scaledBitmap = Bitmap.createScaledBitmap(bitmap, scaledWidth, scaledHeight, true)
-            BitmapDrawable(null, scaledBitmap).apply {
-                setBounds(0, 0, scaledWidth, scaledHeight)
-            }
-        }.getOrNull()
+        // 计算适合文本宽度的图片尺寸
+        val scaledWidth = WIDTH - (2 * X_PADDING).toInt()
+        val scaleFactor = scaledWidth.toFloat() / bitmap.width
+        val scaledHeight = (bitmap.height * scaleFactor).toInt()
+
+        val scaledBitmap = Bitmap.createScaledBitmap(bitmap, scaledWidth, scaledHeight, true)
+        bitmap.recycle()
+        return BitmapDrawable(null, scaledBitmap).apply {
+            setBounds(0, 0, scaledWidth, scaledHeight)
+        }
     }
 
     /**
      * 创建占位符图片
      */
-    private fun createPlaceholder(): Drawable {
+    private fun createPlaceholder(e: Throwable? = null): Drawable {
         val width = WIDTH - (2 * X_PADDING).toInt()
         val height = (width * 0.5625).toInt() // 16:9比例
 
@@ -235,7 +276,7 @@ class TextInterceptor(
         }
 
         // 计算文字位置（水平垂直居中）
-        val text = "插图加载失败"
+        val text = "插图加载失败" + e?.let { "\n${it.javaClass.simpleName}" }
         val x = width / 2f
         val y = height / 2f - (textPaint.descent() + textPaint.ascent()) / 2f
 
@@ -262,4 +303,6 @@ class TextInterceptor(
         this.draw(canvas)
         canvas.restore()
     }
+
+    fun clean(id: String) = imageCache.keys.removeIf { !it.startsWith(id) }
 }
