@@ -1,7 +1,6 @@
 package eu.kanade.tachiyomi.extension.zh.bilinovel
 
 import android.util.Log
-import androidx.preference.EditTextPreference
 import androidx.preference.PreferenceScreen
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.network.await
@@ -51,20 +50,9 @@ class BiliNovel : HttpSource(), ConfigurableSource, ResolvableSource {
                 .remove(PREF_SCREEN_FONT_SIZE).apply()
         }
     }
-    private var chapterlog: String? = null
 
     override fun setupPreferenceScreen(screen: PreferenceScreen) {
         preferencesInternal(screen.context, pref).forEach(screen::addPreference)
-        screen.addPreference(
-            EditTextPreference(screen.context).apply {
-                key = "CHAPTER_LOG"
-                title = "chapterlog 版本"
-                summary = chapterlog ?: "待获取..."
-                dialogMessage = "该项仅作为调试信息，无实际用途"
-                setDefaultValue("在这填啥都没用")
-                setEnabled(false)
-            },
-        )
     }
 
     override fun headersBuilder() = super.headersBuilder()
@@ -96,9 +84,6 @@ class BiliNovel : HttpSource(), ConfigurableSource, ResolvableSource {
         val NEWLINE_REGEX = Regex("(?:\n\r\n)+")
         val DATE_FORMAT = SimpleDateFormat("yyyy-MM-dd", Locale.ENGLISH).apply {
             timeZone = TimeZone.getTimeZone("UTC+8")
-        }
-        val DATETIME_FORMAT = SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss z", Locale.ENGLISH).apply {
-            timeZone = TimeZone.getTimeZone("UTC")
         }
         val TRADITIONAL_CHARACTER_MAP = mapOf(
             '皑' to '皚', '蔼' to '藹', '碍' to '礙', '爱' to '愛', '翱' to '翺', '袄' to '襖',
@@ -355,10 +340,6 @@ class BiliNovel : HttpSource(), ConfigurableSource, ResolvableSource {
         var s1 = 0
         var s2 = 0
         val resp = client.newCall(GET(baseUrl + path, headers)).awaitSuccess()
-        val date = resp.headers["Last-Modified"]?.let {
-            pref.edit().putString("CHAPTER_LOG", it).apply()
-            DATE_FORMAT.format(DATETIME_FORMAT.parse(it)!!)
-        } ?: "无法获取修改日期"
         EXPRESSION_REGEX.findAll(resp.body.string()).forEach { m ->
             SALT_REGEX.findAll(m.value).takeIf { it.count() == 2 }
                 ?.map { calculate(it.value) }
@@ -369,7 +350,6 @@ class BiliNovel : HttpSource(), ConfigurableSource, ResolvableSource {
         }
         salt = Pair(s1, s2).apply {
             val version = path.substringAfter("?")
-            chapterlog = "$version  |  $date"
             Log.v("BiliNovel", "chapterlog: $version, salt1: $first, salt2: $second")
         }
     }
