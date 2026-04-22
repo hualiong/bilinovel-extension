@@ -8,19 +8,19 @@ import androidx.preference.ListPreference
 import androidx.preference.Preference
 import androidx.preference.SwitchPreferenceCompat
 
-const val PREF_POPULAR_DISPLAY = "POPULAR_DISPLAY"
 const val PREF_SCREEN_COLORS = "SCREEN_COLORS"
 const val PREF_SCREEN_FONT_SIZE = "SCREEN_FONT_SIZE"
+
+const val PREF_POPULAR_DISPLAY = "POPULAR_DISPLAY"
+const val PREF_SCREEN_STYLE = "SCREEN_STYLE"
 const val PREF_DISPLAY_TRADITIONAL = "DISPLAY_TRADITIONAL"
 const val PREF_DARK_MODE = "DARK_MODE"
 const val PREF_RATE_LIMIT = "RATE_LIMIT"
 const val PREF_AUTO_BOOKMARK = "AUTO_BOOKMARK"
 const val PREF_NOTICE = "NOTICE"
 const val PREF_LOAD_ALL_IMAGES = "LOAD_ALL_IMAGES"
-const val PREF_HTTP = "HTTP"
 
-val RGB_REGEX = Regex("^#[0-9A-F]{6} #[0-9A-F]{6}$", RegexOption.IGNORE_CASE)
-val FONT_SIZE_REGEX = Regex("^(?:\\d+|\\d+\\.\\d+) (?:\\d+|\\d+\\.\\d+)$")
+val STYLE_REGEX = Regex("^#[0-9A-F]{6} #[0-9A-F]{6} (?:\\d+|\\d+\\.\\d+) (?:\\d+|\\d+\\.\\d+)$", RegexOption.IGNORE_CASE)
 val RATE_LIMIT_REGEX = Regex("^\\d+/\\d+$")
 
 fun preferencesInternal(context: Context, pref: SharedPreferences): Array<Preference> {
@@ -58,45 +58,20 @@ fun preferencesInternal(context: Context, pref: SharedPreferences): Array<Prefer
             setDefaultValue("/top/weekvisit/%d.html")
         },
         EditTextPreference(context).apply {
-            key = PREF_SCREEN_COLORS
-            title = "阅读页颜色设置" // "背景色：#FAFAF8 | 文本色：#000000"
-            summary = pref.getString(key, "#FAFAF8 #000000")!!.split(' ').let {
-                "背景色：${it[0]}   |   文本色：${it[1]}"
+            key = PREF_SCREEN_STYLE
+            title = "阅读页样式设置"
+            summary = pref.getString(key, "#FAFAF8 #000000 52 30")!!.split(' ').let {
+                "背景色：${it[0]}   |   文本色：${it[1]}\n标题字号：${it[2]}   |   正文字号：${it[3]}"
             }
-            dialogMessage = "请用空格隔开输入两个十六进制颜色代码，左边为背景色，右边为文本色。\n默认值：#FAFAF8 #000000"
-            setDefaultValue("#FAFAF8 #000000")
+            dialogMessage = "每项配置用单空格隔开：前两个是颜色样式，格式为十六进制颜色代码，分别配置背景色和文本色；后两个是字号设置，格式为正数，分别配置标题和正文字号\n默认值：#FAFAF8 #000000 52 30"
+            setDefaultValue("#FAFAF8 #000000 52 30")
             setOnPreferenceChangeListener { _, newValue ->
-                if (RGB_REGEX.matches(newValue as String)) {
-                    summary = newValue.split(' ').let { "背景色：${it[0]}   |   文本色：${it[1]}" }
-                    Toast.makeText(context, "已加载章节需清除章节缓存后生效", Toast.LENGTH_LONG)
-                        .show()
+                if (STYLE_REGEX.matches(newValue as String)) {
+                    summary = newValue.split(' ').let { "背景色：${it[0]}   |   文本色：${it[1]}\n标题字号：${it[2]}   |   正文字号：${it[3]}" }
+                    Toast.makeText(context, "已加载章节需清除章节缓存后生效", Toast.LENGTH_LONG).show()
                     true
                 } else {
-                    Toast.makeText(
-                        context,
-                        "“$newValue” 不是符合格式的十六进制颜色代码！",
-                        Toast.LENGTH_LONG,
-                    ).show()
-                    false
-                }
-            }
-        },
-        EditTextPreference(context).apply {
-            key = PREF_SCREEN_FONT_SIZE
-            title = "阅读页字号设置"
-            summary = pref.getString(key, "52 30")!!.split(' ').let {
-                "标题大小：${it[0]}   |   正文大小：${it[1]}"
-            }
-            dialogMessage = "请用空格隔开输入两个大于 0 且可带小数的字号，左边为标题大小，右边为正文大小。\n默认值：52 30"
-            setDefaultValue("52 30")
-            setOnPreferenceChangeListener { _, newValue ->
-                if (FONT_SIZE_REGEX.matches(newValue as String)) {
-                    summary = newValue.split(' ').let { "标题大小：${it[0]}   |   正文大小：${it[1]}" }
-                    Toast.makeText(context, "已加载章节需清除章节缓存后生效", Toast.LENGTH_LONG)
-                        .show()
-                    true
-                } else {
-                    Toast.makeText(context, "非法字号！请检查输入格式", Toast.LENGTH_LONG).show()
+                    Toast.makeText(context, "格式不正确，请检查输入！", Toast.LENGTH_LONG).show()
                     false
                 }
             }
@@ -140,12 +115,6 @@ fun preferencesInternal(context: Context, pref: SharedPreferences): Array<Prefer
             key = PREF_LOAD_ALL_IMAGES
             title = "确保加载所有插图"
             summary = "一旦有插图加载失败，不再用空白图占位，而是可以进行重试，直到加载完所有插图"
-            setDefaultValue(false)
-        },
-        SwitchPreferenceCompat(context).apply {
-            key = PREF_HTTP
-            title = "使用旧版插图请求方式"
-            summary = "如果频繁遇到大量插图加载失败或一半模糊，可尝试开启该项（纯网络问题的话，那就没啥用了）"
             setDefaultValue(false)
         },
         SwitchPreferenceCompat(context).apply {

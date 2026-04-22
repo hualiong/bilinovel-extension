@@ -20,7 +20,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withContext
 import okhttp3.Headers
 import okhttp3.Interceptor
 import okhttp3.MediaType.Companion.toMediaType
@@ -30,13 +29,12 @@ import okhttp3.Response
 import okhttp3.ResponseBody.Companion.toResponseBody
 import java.io.ByteArrayOutputStream
 import java.io.IOException
-import java.net.URL
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 
 class TextInterceptor(
     client: OkHttpClient,
-    private val baseUrl: String,
+    private val headers: Headers,
     private val pref: SharedPreferences,
 ) : Interceptor {
 
@@ -59,8 +57,6 @@ class TextInterceptor(
 
     private val imageCache by lazy { ConcurrentHashMap<String, HashMap<String, Drawable>>() }
 
-    private val headers by lazy { Headers.Builder().add("Referer", baseUrl).build() }
-
     private val client by lazy {
         client.newBuilder().protocols(listOf(Protocol.HTTP_1_1))
             .connectTimeout(15, TimeUnit.SECONDS)
@@ -74,17 +70,14 @@ class TextInterceptor(
         if (url.host != HOST) return chain.proceed(request)
 
         val darkMode = pref.getBoolean(PREF_DARK_MODE, false)
+        val readStyle = pref.getString(PREF_SCREEN_STYLE, "#FAFAF8 #000000 52 30")!!.split(' ')
 
         val screenColor = if (darkMode) {
             Color.BLACK to Color.WHITE
         } else {
-            pref.getString(PREF_SCREEN_COLORS, "#FAFAF8 #000000")!!.split(' ').let {
-                Color.parseColor(it[0]) to Color.parseColor(it[1])
-            }
+            Color.parseColor(readStyle[0]) to Color.parseColor(readStyle[1])
         }
-        val screenFontSize = pref.getString(PREF_SCREEN_FONT_SIZE, "52 30")!!.split(' ').let {
-            it[0].toFloat() to it[1].toFloat()
-        }
+        val screenFontSize = readStyle[2].toFloat() to readStyle[3].toFloat()
 
         val paintHeading = TextPaint().apply {
             color = screenColor.second
@@ -226,18 +219,8 @@ class TextInterceptor(
      */
     private suspend fun loadImage(url: String): Drawable {
         val raw = if (url.startsWith("//")) "https:$url" else url
-        val bitmap = if (pref.getBoolean(PREF_HTTP, false)) {
-            withContext(Dispatchers.IO) {
-                URL(raw).openConnection().apply {
-                    setRequestProperty("Referer", baseUrl)
-                    connectTimeout = 15000
-                    readTimeout = 15000
-                }.getInputStream()
-            }.use(BitmapFactory::decodeStream)
-        } else {
-            val response = client.newCall(GET(raw, headers)).awaitSuccess()
-            response.body.use { it.byteStream().use(BitmapFactory::decodeStream) }
-        }
+        val response = client.newCall(GET(raw, headers)).awaitSuccess()
+        val bitmap = response.body.use { it.byteStream().use(BitmapFactory::decodeStream) }
 
         checkNotNull(bitmap) { throw IOException("位图解码出错") }
 

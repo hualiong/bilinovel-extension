@@ -43,9 +43,15 @@ class BiliNovel : HttpSource(), ConfigurableSource, ResolvableSource {
     override val name = "哔哩轻小说"
     override val supportsLatest = true
 
-    private val pref by getPreferencesLazy()
+    private val pref by getPreferencesLazy {
+        getString(PREF_SCREEN_COLORS, null)?.let {
+            val size = getString(PREF_SCREEN_FONT_SIZE, "52 30")
+            edit().putString(PREF_SCREEN_STYLE, "$it $size")
+                .remove(PREF_SCREEN_COLORS)
+                .remove(PREF_SCREEN_FONT_SIZE).apply()
+        }
+    }
     private var chapterlog: String? = null
-    private val textInterceptor = TextInterceptor(super.client, baseUrl, pref)
 
     override fun setupPreferenceScreen(screen: PreferenceScreen) {
         preferencesInternal(screen.context, pref).forEach(screen::addPreference)
@@ -56,20 +62,23 @@ class BiliNovel : HttpSource(), ConfigurableSource, ResolvableSource {
                 summary = chapterlog ?: "待获取..."
                 dialogMessage = "该项仅作为调试信息，无实际用途"
                 setDefaultValue("在这填啥都没用")
+                setEnabled(false)
             },
         )
     }
+
+    override fun headersBuilder() = super.headersBuilder()
+        .add("Referer", "$baseUrl/")
+        .add("Accept-Language", "zh")
+        .add("Accept", "*/*")
+
+    private val textInterceptor = TextInterceptor(super.client, headers, pref)
 
     override val client = super.client.newBuilder()
         .addInterceptor(textInterceptor).also {
             val s = pref.getString(PREF_RATE_LIMIT, "10/10")!!.split("/")
             it.rateLimitHost(baseUrl.toHttpUrl(), s[0].toInt(), s[1].toInt().seconds)
         }.addNetworkInterceptor(ChapterInterceptor()).build()
-
-    override fun headersBuilder() = super.headersBuilder()
-        .add("Referer", "$baseUrl/")
-        .add("Accept-Language", "zh")
-        .add("Accept", "*/*")
 
     // Customize
 
@@ -572,7 +581,7 @@ class BiliNovel : HttpSource(), ConfigurableSource, ResolvableSource {
     override fun getFilterList() = buildFilterList()
 
     override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
-        if (NOVEL_ID_REGEX.matches(query.toHttpUrl().encodedPath)) return GET(query, headers)
+        NOVEL_ID_REGEX.find(query)?.value?.let { return GET(baseUrl + it, headers) }
         val url = baseUrl.toHttpUrl().newBuilder()
         if (query.isNotBlank()) {
             url.addPathSegment("search").addPathSegment("${query}_$page.html")
@@ -595,6 +604,7 @@ class BiliNovel : HttpSource(), ConfigurableSource, ResolvableSource {
     override fun mangaDetailsParse(response: Response) = SManga.create().apply {
         val switch = pref.getBoolean(PREF_DISPLAY_TRADITIONAL, false)
         val doc = response.asJsoup()
+        doc.selectFirst(".aui-ver-form")?.run { throw Exception(text()) }
         val meta = doc.select(".book-meta")[1].text().convert(switch).split("|")
         val tags = doc.select(".tag-small").map { it.text().convert(switch) }
         val notice = doc.selectFirst(".notice")?.takeIf { pref.getBoolean(PREF_NOTICE, true) }
