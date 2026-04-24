@@ -230,7 +230,8 @@ class TextInterceptor(
         val scaledHeight = (bitmap.height * scaleFactor).toInt()
 
         val scaledBitmap = Bitmap.createScaledBitmap(bitmap, scaledWidth, scaledHeight, true)
-        bitmap.recycle()
+        if (scaledBitmap !== bitmap) bitmap.recycle()
+
         return BitmapDrawable(null, scaledBitmap).apply {
             setBounds(0, 0, scaledWidth, scaledHeight)
         }
