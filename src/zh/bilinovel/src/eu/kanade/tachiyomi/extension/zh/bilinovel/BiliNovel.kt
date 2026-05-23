@@ -71,7 +71,8 @@ class BiliNovel : HttpSource(), ConfigurableSource, ResolvableSource {
     // Customize
 
     companion object {
-        const val BOOKMARK_URL = "%s/modules/article/addbookcase.php?bid=%s&cid=%s&pid=1&ajax_request=1"
+        const val BOOKMARK_URL =
+            "%s/modules/article/addbookcase.php?bid=%s&cid=%s&pid=1&ajax_request=1"
         val DATE_REGEX = Regex("\\d{4}-\\d{1,2}-\\d{1,2}")
         val PAGE_REGEX = Regex("第(\\d+)/(\\d+)页")
         val NOVEL_ID_REGEX = Regex("/novel/(\\d+)\\.html")
@@ -80,7 +81,8 @@ class BiliNovel : HttpSource(), ConfigurableSource, ResolvableSource {
         val EXPRESSION_REGEX = Regex("Number.*?;")
         val SALT_REGEX = Regex("(?<![a-zA-Z0-9_])-?0x[0-9a-fA-F]+(?:[+*\\-]-?0x[0-9a-fA-F]+)+")
         val CHAPTERLOG_REGEX = Regex("/themes/zhmb/js/chapterlog\\.js\\?v[^\"]+")
-        val URL_REGEX = Regex("https?://(www\\.)?[-a-zA-Z0-9@:%._+~#=]{1,256}\\.[a-zA-Z0-9()]{1,6}\\b([-a-zA-Z0-9()!@:%_+.~#?&/=]*)")
+        val URL_REGEX =
+            Regex("https?://(www\\.)?[-a-zA-Z0-9@:%._+~#=]{1,256}\\.[a-zA-Z0-9()]{1,6}\\b([-a-zA-Z0-9()!@:%_+.~#?&/=]*)")
         val NEWLINE_REGEX = Regex("(?:\n\r\n)+")
         val DATE_FORMAT = SimpleDateFormat("yyyy-MM-dd", Locale.ENGLISH).apply {
             timeZone = TimeZone.getTimeZone("UTC+8")
@@ -336,6 +338,40 @@ class BiliNovel : HttpSource(), ConfigurableSource, ResolvableSource {
             }
         }
 
+    private fun buildDescription(doc: Document): String {
+        val configs = pref.getStringSet(PREF_DESCRIPTION, DEFAULT_SET)!!
+        val desc = StringBuilder(doc.selectFirst("#bookSummary > content")!!.formatText("\n\n\n"))
+        configs.forEach { item ->
+            when (item) {
+                "notice" -> {
+                    desc.insert(
+                        0,
+                        doc.selectFirst(".notice")?.let { "> ${it.formatText("\n")}\n\n" }
+                            ?.replace(URL_REGEX, "<$0>")
+                            ?: "",
+                    )
+                }
+
+                "alias" -> {
+                    desc.append(
+                        doc.selectFirst(".bkname-body")?.let { "\n\n\n***别名**：${it.text()}* " }
+                            ?: "",
+                    )
+                }
+
+                "link" -> {
+                    desc.append(
+                        doc.selectFirst(".book-detail-btn .btn-group-cell:last-child > a.orange")
+                            ?.attr("href")?.substringAfter('?')
+                            ?.let { "\n\n\n***[跳转至「嗶哩漫畫」上的对应漫画](https://www.bilimanga.net/detail/$it.html)*** " }
+                            ?: "",
+                    )
+                }
+            }
+        }
+        return desc.toString()
+    }
+
     private suspend fun parseSalt(path: String) {
         var s1 = 0
         var s2 = 0
@@ -426,10 +462,12 @@ class BiliNovel : HttpSource(), ConfigurableSource, ResolvableSource {
             url.contains("wenku") -> {
                 doc.selectInt("#pagelink > strong") < doc.selectInt("#pagelink > .last")
             }
+
             url.contains("search") -> {
                 val find = PAGE_REGEX.find(doc.selectText("#pagelink > span")!!)!!
                 find.groups[1]!!.value.toInt() < find.groups[1]!!.value.toInt()
             }
+
             else -> size == 50
         }
     }
@@ -552,7 +590,8 @@ class BiliNovel : HttpSource(), ConfigurableSource, ResolvableSource {
 
     // Latest Page
 
-    override fun latestUpdatesRequest(page: Int) = GET("$baseUrl/top/lastupdate/$page.html", headers)
+    override fun latestUpdatesRequest(page: Int) =
+        GET("$baseUrl/top/lastupdate/$page.html", headers)
 
     override fun latestUpdatesParse(response: Response) = popularMangaParse(response)
 
@@ -587,14 +626,10 @@ class BiliNovel : HttpSource(), ConfigurableSource, ResolvableSource {
         doc.selectFirst(".aui-ver-form")?.run { throw Exception(text()) }
         val meta = doc.select(".book-meta")[1].text().convert(switch).split("|")
         val tags = doc.select(".tag-small").map { it.text().convert(switch) }
-        val notice = doc.selectFirst(".notice")?.takeIf { pref.getBoolean(PREF_NOTICE, true) }
-            ?.let { "> ${it.formatText("\n")}\n\n" }?.replace(URL_REGEX, "<$0>") ?: ""
-        val desc = doc.selectFirst("#bookSummary > content")!!.formatText("\n\n\n")
-        val bkname = doc.selectFirst(".bkname-body")?.let { "\n\n\n***别名**：${it.text()}* " } ?: ""
         setUrlWithoutDomain(doc.location())
         title = doc.selectText(".book-title")!!.convert(switch)
         thumbnail_url = doc.selectFirst(".book-cover")!!.attr("src")
-        description = "$notice$desc$bkname".convert(switch)
+        description = buildDescription(doc).convert(switch)
         author = doc.selectText(".authorname")?.convert(switch)
         artist = doc.selectText(".illname")?.substringBefore('(')?.convert(switch)
         status = when (meta.getOrNull(1)) {
