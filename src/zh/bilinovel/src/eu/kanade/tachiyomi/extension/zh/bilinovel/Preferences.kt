@@ -8,9 +8,6 @@ import androidx.preference.ListPreference
 import androidx.preference.MultiSelectListPreference
 import androidx.preference.SwitchPreferenceCompat
 
-const val PREF_SCREEN_COLORS = "SCREEN_COLORS"
-const val PREF_SCREEN_FONT_SIZE = "SCREEN_FONT_SIZE"
-
 const val PREF_POPULAR_DISPLAY = "POPULAR_DISPLAY"
 const val PREF_SCREEN_STYLE = "SCREEN_STYLE"
 const val PREF_DISPLAY_TRADITIONAL = "DISPLAY_TRADITIONAL"
@@ -23,7 +20,7 @@ const val PREF_LOAD_ALL_IMAGES = "LOAD_ALL_IMAGES"
 val STYLE_REGEX = Regex("^#[0-9A-F]{6} #[0-9A-F]{6} (?:\\d+|\\d+\\.\\d+) (?:\\d+|\\d+\\.\\d+)$", RegexOption.IGNORE_CASE)
 val RATE_LIMIT_REGEX = Regex("^\\d+/\\d+$")
 
-val DEFAULT_SET = setOf("notice", "alias", "link")
+val DEFAULT_SET = setOf("A", "B", "C")
 
 fun preferencesInternal(context: Context, pref: SharedPreferences) = arrayOf(
     ListPreference(context).apply {
@@ -100,9 +97,9 @@ fun preferencesInternal(context: Context, pref: SharedPreferences) = arrayOf(
         key = PREF_DESCRIPTION
         title = "作品信息显示偏好"
         summary = "设置作品简介中需要显示的额外信息"
-        dialogMessage = "选择需要显示的额外信息，未勾选将不显示"
+        dialogTitle = "勾选需要显示的信息"
         entries = arrayOf("作品公告", "作品别名", "跳转链接")
-        entryValues = arrayOf("notice", "alias", "link")
+        entryValues = arrayOf("A", "B", "C")
         setDefaultValue(DEFAULT_SET)
     },
     SwitchPreferenceCompat(context).apply {

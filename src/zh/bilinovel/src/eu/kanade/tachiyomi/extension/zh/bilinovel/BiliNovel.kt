@@ -42,14 +42,7 @@ class BiliNovel : HttpSource(), ConfigurableSource, ResolvableSource {
     override val name = "哔哩轻小说"
     override val supportsLatest = true
 
-    private val pref by getPreferencesLazy {
-        getString(PREF_SCREEN_COLORS, null)?.let {
-            val size = getString(PREF_SCREEN_FONT_SIZE, "52 30")
-            edit().putString(PREF_SCREEN_STYLE, "$it $size")
-                .remove(PREF_SCREEN_COLORS)
-                .remove(PREF_SCREEN_FONT_SIZE).apply()
-        }
-    }
+    private val pref by getPreferencesLazy()
 
     override fun setupPreferenceScreen(screen: PreferenceScreen) {
         preferencesInternal(screen.context, pref).forEach(screen::addPreference)
@@ -341,9 +334,9 @@ class BiliNovel : HttpSource(), ConfigurableSource, ResolvableSource {
     private fun buildDescription(doc: Document): String {
         val configs = pref.getStringSet(PREF_DESCRIPTION, DEFAULT_SET)!!
         val desc = StringBuilder(doc.selectFirst("#bookSummary > content")!!.formatText("\n\n\n"))
-        configs.forEach { item ->
+        for (item in configs) {
             when (item) {
-                "notice" -> {
+                "A" -> {
                     desc.insert(
                         0,
                         doc.selectFirst(".notice")?.let { "> ${it.formatText("\n")}\n\n" }
@@ -352,18 +345,18 @@ class BiliNovel : HttpSource(), ConfigurableSource, ResolvableSource {
                     )
                 }
 
-                "alias" -> {
+                "B" -> {
                     desc.append(
                         doc.selectFirst(".bkname-body")?.let { "\n\n\n***别名**：${it.text()}* " }
                             ?: "",
                     )
                 }
 
-                "link" -> {
+                "C" -> {
                     desc.append(
                         doc.selectFirst(".book-detail-btn .btn-group-cell:last-child > a.orange")
                             ?.attr("href")?.substringAfter('?')
-                            ?.let { "\n\n\n***[跳转至「嗶哩漫畫」上的对应漫画](https://www.bilimanga.net/detail/$it.html)*** " }
+                            ?.let { "\n\n\n***[跳转至「嗶哩漫畫」上的同名漫画](https://www.bilimanga.net/detail/$it.html)*** " }
                             ?: "",
                     )
                 }
