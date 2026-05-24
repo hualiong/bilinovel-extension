@@ -199,7 +199,7 @@ class TextInterceptor(
                         message = e.message
                     }
                 }
-                if (count > 0) throw IOException("$count / ${imageUrls.size} 张插图加载失败，请重试！\n$message")
+                if (count > 0) throw IOException("$count 张插图加载失败，请重试！\n$message")
             }
         }
         imageCache.remove(key)
