@@ -449,22 +449,6 @@ class BiliNovel : HttpSource(), ConfigurableSource, ResolvableSource {
         return result
     }
 
-    private fun hasNextPage(doc: Document, size: Int): Boolean {
-        val url = doc.location()
-        return when {
-            url.contains("wenku") -> {
-                doc.selectInt("#pagelink > strong") < doc.selectInt("#pagelink > .last")
-            }
-
-            url.contains("search") -> {
-                val find = PAGE_REGEX.find(doc.selectText("#pagelink > span")!!)!!
-                find.groups[1]!!.value.toInt() < find.groups[1]!!.value.toInt()
-            }
-
-            else -> size == 50
-        }
-    }
-
     private fun getChapterUrlByContext(i: Int, els: Elements) = when (i) {
         els.lastIndex -> "${els[i - 1].attr("href").replace(".html", "_66.html")}#next"
         else -> "${els[i + 1].attr("href")}#prev"
@@ -578,7 +562,19 @@ class BiliNovel : HttpSource(), ConfigurableSource, ResolvableSource {
                 title = img.attr("alt").convert()
             }
         }
-        MangasPage(mangas, mangas.isNotEmpty() && hasNextPage(doc, mangas.size))
+        val hasNextPage = when (response.request.url.pathSegments.first()) {
+            "wenku" -> {
+                doc.selectInt("#pagelink > strong") < doc.selectInt("#pagelink > .last")
+            }
+
+            "search" -> {
+                val find = doc.selectText("#pagelink > span")?.let(PAGE_REGEX::find)
+                find != null && find.groups[1]!!.value.toInt() < find.groups[2]!!.value.toInt()
+            }
+
+            else -> mangas.size == 50
+        }
+        MangasPage(mangas, hasNextPage)
     }
 
     // Latest Page
