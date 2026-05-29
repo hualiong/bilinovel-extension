@@ -2,10 +2,10 @@
   {
     "name": "Tachiyomi: BiliNovel",
     "pkg": "eu.kanade.tachiyomi.extension.zh.bilinovel",
-    "apk": "tachiyomi-zh.bilinovel-v1.5.17.apk",
+    "apk": "tachiyomi-zh.bilinovel-v1.5.18.apk",
     "lang": "zh",
-    "code": 17,
-    "version": "1.5.17",
+    "code": 18,
+    "version": "1.5.18",
     "nsfw": 0,
     "sources": [
       {
