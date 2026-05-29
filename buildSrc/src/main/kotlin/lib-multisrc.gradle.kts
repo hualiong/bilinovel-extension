@@ -6,10 +6,10 @@ plugins {
 }
 
 android {
-    compileSdk = AndroidConfig.compileSdk
+    compileSdk = AndroidConfig.COMPILE_SDK
 
     defaultConfig {
-        minSdk = AndroidConfig.minSdk
+        minSdk = AndroidConfig.MIN_SDK
     }
 
     namespace = "eu.kanade.tachiyomi.multisrc.${project.name}"

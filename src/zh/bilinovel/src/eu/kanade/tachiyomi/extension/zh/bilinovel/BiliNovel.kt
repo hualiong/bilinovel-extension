@@ -514,18 +514,18 @@ class BiliNovel : HttpSource(), ConfigurableSource, ResolvableSource {
                     text("\u00A0\u00A0\u00A0\u00A0" + text())
                 }
             }
-        }.map { it!! } // 转换为非空列表
+        }
 
         // 7. 替换原始节点中的<p>元素
         var paraIndex = 0
         childNodes.forEachIndexed { i, e ->
             if (e.tagName() == "p") {
-                childNodes[i] = shuffled[paraIndex++]
+                childNodes[i] = shuffled[paraIndex++]!!
             }
         }
 
         // 8. 清空并重新添加处理后的节点
-        return content.html("").appendChildren(childNodes).html()
+        return childNodes.joinToString(separator = "") { it.outerHtml() }
     }
 
     // Deep Link
