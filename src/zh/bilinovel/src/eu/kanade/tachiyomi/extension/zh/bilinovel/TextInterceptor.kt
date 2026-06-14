@@ -50,9 +50,7 @@ class TextInterceptor(
         private const val DIVIDER_MARGIN: Float = 30f
         val URL_REGEX = Regex("""<img[^>]+src\s*=\s*["']([^"']+)["'][^>]*>""")
         val DIVIDER_COLOR = Color.parseColor("#E0E0E0")
-        fun createUrl(key: String, title: String, text: String): String {
-            return "http://$HOST/${Uri.encode(key)}/${Uri.encode(title)}/${Uri.encode(text)}"
-        }
+        fun createUrl(key: String, title: String, text: String): String = "http://$HOST/${Uri.encode(key)}/${Uri.encode(title)}/${Uri.encode(text)}"
     }
 
     private val imageCache by lazy { ConcurrentHashMap<String, HashMap<String, Drawable>>() }

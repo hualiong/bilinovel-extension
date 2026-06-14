@@ -1,3 +1,5 @@
+@file:Suppress("ktlint:standard:property-naming")
+
 package eu.kanade.tachiyomi.source.model
 
 @Suppress("unused")
@@ -14,8 +16,6 @@ interface SChapter {
     var scanlator: String?
 
     companion object {
-        fun create(): SChapter {
-            throw Exception("Stub!")
-        }
+        fun create(): SChapter = throw Exception("Stub!")
     }
 }

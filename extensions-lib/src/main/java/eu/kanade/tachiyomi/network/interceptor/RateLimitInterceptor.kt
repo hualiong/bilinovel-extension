@@ -44,5 +44,5 @@ fun OkHttpClient.Builder.rateLimit(
  */
 fun OkHttpClient.Builder.rateLimit(
     permits: Int,
-    period: Duration = 1.seconds
+    period: Duration = 1.seconds,
 ): OkHttpClient.Builder = throw Exception("Stub!")

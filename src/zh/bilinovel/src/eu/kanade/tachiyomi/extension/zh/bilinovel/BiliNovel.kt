@@ -36,7 +36,10 @@ import java.util.TimeZone
 import kotlin.math.floor
 import kotlin.time.Duration.Companion.seconds
 
-class BiliNovel : HttpSource(), ConfigurableSource, ResolvableSource {
+class BiliNovel :
+    HttpSource(),
+    ConfigurableSource,
+    ResolvableSource {
     override val baseUrl = "https://www.bilinovel.com"
     override val lang = "zh"
     override val name = "哔哩轻小说"
@@ -304,32 +307,27 @@ class BiliNovel : HttpSource(), ConfigurableSource, ResolvableSource {
     private var salt: Pair<Int, Int>? = null
     private val SManga.id get() = NOVEL_ID_REGEX.find(url)!!.groups[1]!!.value
     private val Page.ids get() = CHAPTER_IDS_REGEX.find(url)!!.groups.drop(1).map { it?.value }
-    private fun String.toHalfWidthDigits(): String {
-        return this.map { if (it in '０'..'９') it - 65248 else it }.joinToString("")
-    }
+    private fun String.toHalfWidthDigits(): String = this.map { if (it in '０'..'９') it - 65248 else it }.joinToString("")
 
     private fun String.convert(
         switch: Boolean = pref.getBoolean(PREF_DISPLAY_TRADITIONAL, false),
-    ): String {
-        return if (switch) {
-            this.map { c -> TRADITIONAL_CHARACTER_MAP[c] ?: c }.joinToString("")
-        } else {
-            this
-        }
+    ): String = if (switch) {
+        this.map { c -> TRADITIONAL_CHARACTER_MAP[c] ?: c }.joinToString("")
+    } else {
+        this
     }
 
     private fun Element.formatText(c: String) = this.wholeText().replace(NEWLINE_REGEX, c).trim()
 
-    private fun Elements.mapToChapter(switch: Boolean, date: Long, volume: String? = null) =
-        mapIndexed { i, element ->
-            val url = element.absUrl("href").takeUnless("javascript:cid(1)"::equals)
-            SChapter.create().apply {
-                name = element.text().toHalfWidthDigits().convert(switch)
-                date_upload = date
-                volume?.let { scanlator = it.convert(switch) }
-                setUrlWithoutDomain(url ?: getChapterUrlByContext(i, this@mapToChapter))
-            }
+    private fun Elements.mapToChapter(switch: Boolean, date: Long, volume: String? = null) = mapIndexed { i, element ->
+        val url = element.absUrl("href").takeUnless("javascript:cid(1)"::equals)
+        SChapter.create().apply {
+            name = element.text().toHalfWidthDigits().convert(switch)
+            date_upload = date
+            volume?.let { scanlator = it.convert(switch) }
+            setUrlWithoutDomain(url ?: getChapterUrlByContext(i, this@mapToChapter))
         }
+    }
 
     private fun buildDescription(doc: Document): String {
         val configs = pref.getStringSet(PREF_DESCRIPTION, DEFAULT_SET)!!
@@ -556,10 +554,10 @@ class BiliNovel : HttpSource(), ConfigurableSource, ResolvableSource {
     override fun popularMangaParse(response: Response) = response.asJsoup().let { doc ->
         val mangas = doc.select(".book-layout").map {
             SManga.create().apply {
-                setUrlWithoutDomain(it.absUrl("href"))
                 val img = it.selectFirst("img")!!
                 thumbnail_url = img.absUrl("data-src")
                 title = img.attr("alt").convert()
+                setUrlWithoutDomain(it.absUrl("href"))
             }
         }
         val hasNextPage = when (response.request.url.pathSegments.first()) {
@@ -579,8 +577,7 @@ class BiliNovel : HttpSource(), ConfigurableSource, ResolvableSource {
 
     // Latest Page
 
-    override fun latestUpdatesRequest(page: Int) =
-        GET("$baseUrl/top/lastupdate/$page.html", headers)
+    override fun latestUpdatesRequest(page: Int) = GET("$baseUrl/top/lastupdate/$page.html", headers)
 
     override fun latestUpdatesParse(response: Response) = popularMangaParse(response)
 
@@ -615,7 +612,6 @@ class BiliNovel : HttpSource(), ConfigurableSource, ResolvableSource {
         doc.selectFirst(".aui-ver-form")?.run { throw Exception(text()) }
         val meta = doc.select(".book-meta")[1].text().convert(switch).split("|")
         val tags = doc.select(".tag-small").map { it.text().convert(switch) }
-        setUrlWithoutDomain(doc.location())
         title = doc.selectText(".book-title")!!.convert(switch)
         thumbnail_url = doc.selectFirst(".book-cover")!!.attr("src")
         description = buildDescription(doc).convert(switch)
@@ -628,12 +624,12 @@ class BiliNovel : HttpSource(), ConfigurableSource, ResolvableSource {
         }
         genre = (tags + meta.getOrElse(2) { "" }).joinToString()
         initialized = true
+        setUrlWithoutDomain(doc.location())
     }
 
     // Catalog Page
 
-    override fun chapterListRequest(manga: SManga) =
-        GET("$baseUrl/novel/${manga.id}/catalog", headers)
+    override fun chapterListRequest(manga: SManga) = GET("$baseUrl/novel/${manga.id}/catalog", headers)
 
     override fun chapterListParse(response: Response) = response.asJsoup().let { resp ->
         val switch = pref.getBoolean(PREF_DISPLAY_TRADITIONAL, false)
@@ -652,14 +648,12 @@ class BiliNovel : HttpSource(), ConfigurableSource, ResolvableSource {
 
     // Manga View Page
 
-    override fun pageListRequest(chapter: SChapter): Request {
-        return GET(
-            url = baseUrl + chapter.url.let {
-                if (it.contains("#")) it else it.replace(".", "_2.")
-            },
-            headers = headers,
-        )
-    }
+    override fun pageListRequest(chapter: SChapter): Request = GET(
+        url = baseUrl + chapter.url.let {
+            if (it.contains("#")) it else it.replace(".", "_2.")
+        },
+        headers = headers,
+    )
 
     override fun pageListParse(response: Response) = response.asJsoup().let { doc ->
         doc.selectFirst("#acontent > .center-note")?.run { throw Exception(text()) }

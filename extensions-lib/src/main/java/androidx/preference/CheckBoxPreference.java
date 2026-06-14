@@ -4,9 +4,8 @@ import android.content.Context;
 
 public class CheckBoxPreference extends TwoStatePreference {
 
-    public CheckBoxPreference(Context context) {
-        super(context);
-        throw new RuntimeException("Stub!");
-    }
-
+  public CheckBoxPreference(Context context) {
+    super(context);
+    throw new RuntimeException("Stub!");
+  }
 }
