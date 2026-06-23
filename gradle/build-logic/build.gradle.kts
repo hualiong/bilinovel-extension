@@ -53,6 +53,10 @@ gradlePlugin {
             id = kei.plugins.library.get().pluginId
             implementationClass = "PluginLibrary"
         }
+        register("multisrc") {
+            id = kei.plugins.multisrc.get().pluginId
+            implementationClass = "PluginMultiSrc"
+        }
         register("spotless") {
             id = kei.plugins.spotless.get().pluginId
             implementationClass = "PluginSpotless"

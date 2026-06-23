@@ -142,7 +142,6 @@ class PluginExtensionLegacy : Plugin<Project> {
             if (theme != null) implementation(theme) // Overrides core launcher icons
             implementation(project(":core"))
             compileOnly(libs.bundles.common)
-            compileOnly(project(":extensions-lib"))
         }
 
         afterEvaluate {

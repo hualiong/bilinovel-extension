@@ -15,14 +15,6 @@ fun DependencyHandlerScope.compileOnly(dependencyNotation: Provider<ExternalModu
     add("compileOnly", dependencyNotation)
 }
 
-fun DependencyHandlerScope.compileOnly(dependencyNotation: ProjectDependency) {
-    add("compileOnly", dependencyNotation)
-}
-
-fun DependencyHandlerScope.compileOnly(dependencyNotation: Project) {
-    add("compileOnly", dependencyNotation)
-}
-
 @JvmName("implementationBundle")
 fun DependencyHandlerScope.implementation(dependencyNotation: Provider<ExternalModuleDependencyBundle>) {
     add("implementation", dependencyNotation)
