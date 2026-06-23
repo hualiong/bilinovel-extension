@@ -286,7 +286,7 @@ abstract class HttpSource : CatalogueSource {
      *
      * @param url the full url to the chapter.
      */
-    fun SChapter.setUrlWithoutDomain(url: String): Nothing = throw Exception("Stub!")
+    fun SChapter.setUrlWithoutDomain(url: String): Unit = throw Exception("Stub!")
 
     /**
      * Assigns the url of the manga without the scheme and domain. It saves some redundancy from
@@ -294,7 +294,7 @@ abstract class HttpSource : CatalogueSource {
      *
      * @param url the full url to the manga.
      */
-    fun SManga.setUrlWithoutDomain(url: String): Nothing = throw Exception("Stub!")
+    fun SManga.setUrlWithoutDomain(url: String): Unit = throw Exception("Stub!")
 
     /**
      * Returns the url of the given string without the scheme and domain.

@@ -40,7 +40,7 @@ class BiliNovel :
     HttpSource(),
     ConfigurableSource,
     ResolvableSource {
-    override val baseUrl = "https://www.bilinovel.com"
+    override val baseUrl = "https://m.bilinovel.com"
     override val lang = "zh"
     override val name = "哔哩轻小说"
     override val supportsLatest = true
@@ -77,8 +77,6 @@ class BiliNovel :
         val EXPRESSION_REGEX = Regex("Number.*?;")
         val SALT_REGEX = Regex("(?<![a-zA-Z0-9_])-?0x[0-9a-fA-F]+(?:[+*\\-]-?0x[0-9a-fA-F]+)+")
         val CHAPTERLOG_REGEX = Regex("/themes/zhmb/js/chapterlog\\.js\\?v[^\"]+")
-        val URL_REGEX =
-            Regex("https?://(www\\.)?[-a-zA-Z0-9@:%._+~#=]{1,256}\\.[a-zA-Z0-9()]{1,6}\\b([-a-zA-Z0-9()!@:%_+.~#?&/=]*)")
         val NEWLINE_REGEX = Regex("(?:\n\r\n)+")
         val DATE_FORMAT = SimpleDateFormat("yyyy-MM-dd", Locale.ENGLISH).apply {
             timeZone = TimeZone.getTimeZone("UTC+8")
@@ -337,16 +335,13 @@ class BiliNovel :
                 "A" -> {
                     desc.insert(
                         0,
-                        doc.selectFirst(".notice")?.let { "> ${it.formatText("\n")}\n\n" }
-                            ?.replace(URL_REGEX, "<$0>")
-                            ?: "",
+                        doc.selectFirst(".notice")?.let { "> ${it.formatText("\n")}\n\n" } ?: "",
                     )
                 }
 
                 "B" -> {
                     desc.append(
-                        doc.selectFirst(".bkname-body")?.let { "\n\n\n***别名**：${it.text()}* " }
-                            ?: "",
+                        doc.selectFirst(".bkname-body")?.let { "\n\n\n***别名**：${it.text()}* " } ?: "",
                     )
                 }
 
@@ -554,10 +549,10 @@ class BiliNovel :
     override fun popularMangaParse(response: Response) = response.asJsoup().let { doc ->
         val mangas = doc.select(".book-layout").map {
             SManga.create().apply {
+                setUrlWithoutDomain(it.absUrl("href"))
                 val img = it.selectFirst("img")!!
                 thumbnail_url = img.absUrl("data-src")
                 title = img.attr("alt").convert()
-                setUrlWithoutDomain(it.absUrl("href"))
             }
         }
         val hasNextPage = when (response.request.url.pathSegments.first()) {
@@ -612,6 +607,7 @@ class BiliNovel :
         doc.selectFirst(".aui-ver-form")?.run { throw Exception(text()) }
         val meta = doc.select(".book-meta")[1].text().convert(switch).split("|")
         val tags = doc.select(".tag-small").map { it.text().convert(switch) }
+        setUrlWithoutDomain(doc.location())
         title = doc.selectText(".book-title")!!.convert(switch)
         thumbnail_url = doc.selectFirst(".book-cover")!!.attr("src")
         description = buildDescription(doc).convert(switch)
@@ -624,7 +620,6 @@ class BiliNovel :
         }
         genre = (tags + meta.getOrElse(2) { "" }).joinToString()
         initialized = true
-        setUrlWithoutDomain(doc.location())
     }
 
     // Catalog Page
@@ -639,9 +634,6 @@ class BiliNovel :
         resp.select(".catalog-volume").takeIf(Elements::isNotEmpty)?.flatMap {
             val bar = it.selectText(".chapter-bar")!!.substring(title.length + 1)
             val volume = if (bar.first().isDigit()) "Vol.$bar" else bar.toHalfWidthDigits()
-            // val volume = NUM_REGEX.matchEntire(bar.substringBefore("（"))
-            //     ?.let { r -> "第 ${r.value} 卷" + bar.substringAfter(r.value) }
-            //     ?: bar.toHalfWidthDigits()
             it.select(".chapter-li-a").mapToChapter(switch, date, volume)
         } ?: resp.select(".chapter-li-a").mapToChapter(switch, date)
     }.reversed()
