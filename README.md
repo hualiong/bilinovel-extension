@@ -26,6 +26,10 @@ https://raw.githubusercontent.com/hualiong/bilinovel-extension/main/index.min.js
 
 ## 更新日志
 
+### [1.5.19] - 2026-06-23
+- 更换[新域名](https://m.bilinovel.com)
+- 修复搜索任意关键字没结果的问题
+
 ### [1.5.18] - 2026-05-29
 - 简介里新增“跳转链接”，点击可跳转至「嗶哩漫畫」中的同名漫画页（可以触发 `Bilimanga.net` 插件的深度链接功能，直接在 mihon 内跳转至该插件的漫画详细页）
 - 将“公告”设置项改为多选设置项，可以同时设置简介里是否显示公告、别名和跳转链接
