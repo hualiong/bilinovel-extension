@@ -20,7 +20,6 @@ android {
 
 dependencies {
     compileOnly(libs.bundles.common)
-    compileOnly(project(":extensions-lib"))
 
     testImplementation(libs.bundles.common)
     testImplementation(libs.junit)
