@@ -26,6 +26,9 @@ https://raw.githubusercontent.com/hualiong/bilinovel-extension/main/index.min.js
 
 ## 更新日志
 
+### [1.6.20] - 2026-06-27
+- **将插件 API 级别从 1.5 升到 1.6**
+
 ### [1.5.19] - 2026-06-23
 - 更换[新域名](https://m.bilinovel.com)
 - 修复搜索任意关键字没结果的问题
