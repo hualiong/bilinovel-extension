@@ -3,29 +3,30 @@ package eu.kanade.tachiyomi.extension.zh.bilinovel
 import android.util.Log
 import androidx.preference.PreferenceScreen
 import eu.kanade.tachiyomi.network.GET
-import eu.kanade.tachiyomi.network.await
 import eu.kanade.tachiyomi.network.awaitSuccess
-import eu.kanade.tachiyomi.network.interceptor.rateLimitHost
 import eu.kanade.tachiyomi.source.ConfigurableSource
 import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.MangasPage
 import eu.kanade.tachiyomi.source.model.Page
 import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
+import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.source.online.HttpSource
-import eu.kanade.tachiyomi.source.online.ResolvableSource
-import eu.kanade.tachiyomi.source.online.UriType
 import eu.kanade.tachiyomi.util.asJsoup
-import eu.kanade.tachiyomi.util.selectInt
-import eu.kanade.tachiyomi.util.selectText
+import keiyoushi.network.rateLimit
+import keiyoushi.utils.get
 import keiyoushi.utils.getPreferencesLazy
+import keiyoushi.utils.selectInt
+import keiyoushi.utils.selectText
 import keiyoushi.utils.tryParse
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.supervisorScope
 import okhttp3.HttpUrl.Companion.toHttpUrl
-import okhttp3.Request
 import okhttp3.Response
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
@@ -38,8 +39,7 @@ import kotlin.time.Duration.Companion.seconds
 
 class BiliNovel :
     HttpSource(),
-    ConfigurableSource,
-    ResolvableSource {
+    ConfigurableSource {
     override val baseUrl = "https://m.bilinovel.com"
     override val lang = "zh"
     override val name = "哔哩轻小说"
@@ -61,7 +61,9 @@ class BiliNovel :
     override val client = super.client.newBuilder()
         .addInterceptor(textInterceptor).also {
             val s = pref.getString(PREF_RATE_LIMIT, "10/10")!!.split("/")
-            it.rateLimitHost(baseUrl.toHttpUrl(), s[0].toInt(), s[1].toInt().seconds)
+            it.rateLimit(s[0].toInt(), s[1].toInt().seconds) { url ->
+                url.host == baseUrl.removePrefix("https://")
+            }
         }.addNetworkInterceptor(ChapterInterceptor()).build()
 
     // Customize
@@ -320,10 +322,10 @@ class BiliNovel :
     private fun Elements.mapToChapter(switch: Boolean, date: Long, volume: String? = null) = mapIndexed { i, element ->
         val url = element.absUrl("href").takeUnless("javascript:cid(1)"::equals)
         SChapter.create().apply {
+            setUrlWithoutDomain(url ?: getChapterUrlByContext(i, this@mapToChapter))
             name = element.text().toHalfWidthDigits().convert(switch)
             date_upload = date
             volume?.let { scanlator = it.convert(switch) }
-            setUrlWithoutDomain(url ?: getChapterUrlByContext(i, this@mapToChapter))
         }
     }
 
@@ -361,8 +363,8 @@ class BiliNovel :
     private suspend fun parseSalt(path: String) {
         var s1 = 0
         var s2 = 0
-        val resp = client.newCall(GET(baseUrl + path, headers)).awaitSuccess()
-        EXPRESSION_REGEX.findAll(resp.body.string()).forEach { m ->
+        val body = client.get(baseUrl + path, headers).body.string()
+        EXPRESSION_REGEX.findAll(body).forEach { m ->
             SALT_REGEX.findAll(m.value).takeIf { it.count() == 2 }
                 ?.map { calculate(it.value) }
                 ?.let { salt ->
@@ -505,48 +507,7 @@ class BiliNovel :
         return childNodes.joinToString(separator = "") { it.outerHtml() }
     }
 
-    // Deep Link
-
-    override fun getUriType(uri: String): UriType {
-        val url = runCatching { uri.toHttpUrl() }.getOrNull() ?: return UriType.Unknown
-        val uriType = when {
-            !url.host.endsWith("bilinovel.com") && !url.host.endsWith("linovelib.com") -> UriType.Unknown
-            NOVEL_ID_REGEX.matches(url.encodedPath) -> UriType.Manga
-            CHAPTER_IDS_REGEX.matches(url.encodedPath) -> UriType.Chapter
-            else -> UriType.Unknown
-        }
-        return uriType
-    }
-
-    override suspend fun getManga(uri: String): SManga? {
-        val httpUrl = uri.toHttpUrl()
-        val url = if (NOVEL_ID_REGEX.matches(httpUrl.encodedPath)) {
-            httpUrl.encodedPath
-        } else {
-            val mangaId = CHAPTER_IDS_REGEX.find(httpUrl.encodedPath)!!.groups[1]!!.value
-            "/novel/$mangaId.html"
-        }
-        return try {
-            val response = client.newCall(GET(baseUrl + url, headers)).await()
-            mangaDetailsParse(response)
-        } catch (_: Exception) {
-            null
-        }
-    }
-
-    override suspend fun getChapter(uri: String) = SChapter.create().apply {
-        url = uri.toHttpUrl().encodedPath
-        name = "Test Chapter"
-    }
-
-    // Popular Page
-
-    override fun popularMangaRequest(page: Int): Request {
-        val suffix = pref.getString(PREF_POPULAR_DISPLAY, "/top/weekvisit/%d.html")!!
-        return GET(baseUrl + String.format(suffix, page), headers)
-    }
-
-    override fun popularMangaParse(response: Response) = response.asJsoup().let { doc ->
+    private fun mangaPageParse(response: Response) = response.asJsoup().let { doc ->
         val mangas = doc.select(".book-layout").map {
             SManga.create().apply {
                 setUrlWithoutDomain(it.absUrl("href"))
@@ -570,40 +531,9 @@ class BiliNovel :
         MangasPage(mangas, hasNextPage)
     }
 
-    // Latest Page
-
-    override fun latestUpdatesRequest(page: Int) = GET("$baseUrl/top/lastupdate/$page.html", headers)
-
-    override fun latestUpdatesParse(response: Response) = popularMangaParse(response)
-
-    // Search Page
-
-    override fun getFilterList() = buildFilterList()
-
-    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
-        NOVEL_ID_REGEX.find(query)?.value?.let { return GET(baseUrl + it, headers) }
-        val url = baseUrl.toHttpUrl().newBuilder()
-        if (query.isNotBlank()) {
-            url.addPathSegment("search").addPathSegment("${query}_$page.html")
-        } else {
-            url.addPathSegment("wenku")
-                .addPathSegment("${filters[3]}_${filters[2]}_${filters[6]}_${filters[4]}_${filters[1]}_0_0_${filters[5]}_${page}_0.html")
-        }
-        return GET(url.build(), headers)
-    }
-
-    override fun searchMangaParse(response: Response): MangasPage {
-        if (response.request.url.pathSegments.contains("novel")) {
-            return MangasPage(listOf(mangaDetailsParse(response)), false)
-        }
-        return popularMangaParse(response)
-    }
-
-    // Manga Detail Page
-
-    override fun mangaDetailsParse(response: Response) = SManga.create().apply {
+    private fun Response.parseManga() = SManga.create().apply {
+        val doc = asJsoup()
         val switch = pref.getBoolean(PREF_DISPLAY_TRADITIONAL, false)
-        val doc = response.asJsoup()
         doc.selectFirst(".aui-ver-form")?.run { throw Exception(text()) }
         val meta = doc.select(".book-meta")[1].text().convert(switch).split("|")
         val tags = doc.select(".tag-small").map { it.text().convert(switch) }
@@ -622,37 +552,89 @@ class BiliNovel :
         initialized = true
     }
 
-    // Catalog Page
+    // Popular Page
 
-    override fun chapterListRequest(manga: SManga) = GET("$baseUrl/novel/${manga.id}/catalog", headers)
+    override suspend fun getPopularManga(page: Int): MangasPage {
+        val suffix = pref.getString(PREF_POPULAR_DISPLAY, "/top/weekvisit/%d.html")!!
+        return mangaPageParse(client.get(baseUrl + String.format(suffix, page), headers))
+    }
 
-    override fun chapterListParse(response: Response) = response.asJsoup().let { resp ->
-        val switch = pref.getBoolean(PREF_DISPLAY_TRADITIONAL, false)
-        val info = resp.selectText(".chapter-sub-title")!!
-        val title = resp.selectText(".book-title")!!
-        val date = DATE_FORMAT.tryParse(DATE_REGEX.find(info)?.value)
-        resp.select(".catalog-volume").takeIf(Elements::isNotEmpty)?.flatMap {
-            val bar = it.selectText(".chapter-bar")!!.substring(title.length + 1)
-            val volume = if (bar.first().isDigit()) "Vol.$bar" else bar.toHalfWidthDigits()
-            it.select(".chapter-li-a").mapToChapter(switch, date, volume)
-        } ?: resp.select(".chapter-li-a").mapToChapter(switch, date)
-    }.reversed()
+    // Latest Page
+
+    override suspend fun getLatestUpdates(page: Int): MangasPage = mangaPageParse(client.get("$baseUrl/top/lastupdate/$page.html", headers))
+
+    // Search Page
+
+    override fun getFilterList() = buildFilterList()
+
+    override suspend fun getSearchManga(page: Int, query: String, filters: FilterList): MangasPage {
+        val request = NOVEL_ID_REGEX.find(query)?.value?.let { GET(baseUrl + it, headers) } ?: run {
+            val url = baseUrl.toHttpUrl().newBuilder()
+            if (query.isNotBlank()) {
+                url.addPathSegment("search").addPathSegment("${query}_$page.html")
+            } else {
+                url.addPathSegment("wenku")
+                    .addPathSegment("${filters[3]}_${filters[2]}_${filters[6]}_${filters[4]}_${filters[1]}_0_0_${filters[5]}_${page}_0.html")
+            }
+            GET(url.build(), headers)
+        }
+        val response = client.newCall(request).awaitSuccess()
+        if (response.request.url.pathSegments.contains("novel")) {
+            return MangasPage(listOf(response.parseManga()), false)
+        }
+        return mangaPageParse(response)
+    }
+
+    // Manga Update
+
+    override suspend fun getMangaUpdate(
+        manga: SManga,
+        chapters: List<SChapter>,
+        fetchDetails: Boolean,
+        fetchChapters: Boolean,
+    ) = supervisorScope {
+        val asyncManga = if (fetchDetails) {
+            async { client.get(baseUrl + manga.url, headers).parseManga() }
+        } else {
+            CompletableDeferred(manga)
+        }
+
+        val asyncChapters = if (fetchChapters) {
+            async {
+                val doc = client.get("$baseUrl/novel/${manga.id}/catalog", headers).asJsoup()
+                val switch = pref.getBoolean(PREF_DISPLAY_TRADITIONAL, false)
+                val info = doc.selectText(".chapter-sub-title")!!
+                val title = doc.selectText(".book-title")!!
+                val date = DATE_FORMAT.tryParse(DATE_REGEX.find(info)?.value)
+                doc.select(".catalog-volume").takeIf(Elements::isNotEmpty)?.flatMap {
+                    val bar = it.selectText(".chapter-bar")!!.substring(title.length + 1)
+                    val volume = if (bar.first().isDigit()) "Vol.$bar" else bar.toHalfWidthDigits()
+                    it.select(".chapter-li-a").mapToChapter(switch, date, volume)
+                }?.reversed() ?: doc.select(".chapter-li-a").mapToChapter(switch, date).reversed()
+            }
+        } else {
+            CompletableDeferred(chapters)
+        }
+
+        SMangaUpdate(asyncManga.await(), asyncChapters.await())
+    }
 
     // Manga View Page
 
-    override fun pageListRequest(chapter: SChapter): Request = GET(
-        url = baseUrl + chapter.url.let {
-            if (it.contains("#")) it else it.replace(".", "_2.")
-        },
-        headers = headers,
-    )
-
-    override fun pageListParse(response: Response) = response.asJsoup().let { doc ->
-        doc.selectFirst("#acontent > .center-note")?.run { throw Exception(text()) }
-        val size = PAGE_SIZE_REGEX.find(doc.selectText("#atitle")!!)!!.groups[1]!!.value
-        val prefix = doc.location().substringBeforeLast("_")
-        List(size.toInt().takeUnless { it == 0 } ?: 1) { i ->
-            Page(i, prefix + "${if (i > 0) "_${i + 1}" else ""}.html")
+    override suspend fun getPageList(chapter: SChapter): List<Page> {
+        val response = client.get(
+            baseUrl + chapter.url.let {
+                if (it.contains("#")) it else it.replace(".", "_2.")
+            },
+            headers,
+        )
+        return response.asJsoup().let { doc ->
+            doc.selectFirst("#acontent > .center-note")?.run { throw Exception(text()) }
+            val size = PAGE_SIZE_REGEX.find(doc.selectText("#atitle")!!)!!.groups[1]!!.value
+            val prefix = doc.location().substringBeforeLast("_")
+            List(size.toInt().takeUnless { it == 0 } ?: 1) { i ->
+                Page(i, prefix + "${if (i > 0) "_${i + 1}" else ""}.html")
+            }
         }
     }
 
@@ -668,7 +650,7 @@ class BiliNovel :
                 val apiUrl = BOOKMARK_URL.format(baseUrl, ids[0], ids[1])
                 CoroutineScope(currentCoroutineContext()).launch(Dispatchers.IO) {
                     try {
-                        val response = client.newCall(GET(apiUrl, headers)).awaitSuccess()
+                        val response = client.get(apiUrl, headers)
                         if (response.body.string().startsWith("对不起")) {
                             pref.edit().putBoolean(PREF_AUTO_BOOKMARK, false).apply()
                         }
@@ -679,8 +661,7 @@ class BiliNovel :
                 }
             }
         }
-        val response = client.newCall(imageUrlRequest(page)).awaitSuccess()
-        return imageUrlParse(response, "${ids[1]}-${ids[2] ?: "1"}")
+        return imageUrlParse(client.get(page.url, headers), "${ids[1]}-${ids[2] ?: "1"}")
     }
 
     private suspend fun imageUrlParse(resp: Response, key: String) = resp.asJsoup().let { doc ->
@@ -695,6 +676,4 @@ class BiliNovel :
             sort(content, chapterId).convert(switch),
         )
     }
-
-    override fun imageUrlParse(response: Response) = throw UnsupportedOperationException()
 }

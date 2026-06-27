@@ -59,7 +59,7 @@ class PluginExtensionLegacy : Plugin<Project> {
             defaultConfig {
                 applicationIdSuffix = project.parent?.name + "." + project.name
                 versionCode = if (theme == null) extVersionCode else theme.baseVersionCode + overrideVersionCode
-                versionName = "1.5.$versionCode"
+                versionName = "1.6.$versionCode"
                 base {
                     archivesName.set("tachiyomi-$applicationIdSuffix-v$versionName")
                 }

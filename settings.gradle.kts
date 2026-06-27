@@ -38,8 +38,7 @@ rootProject.name = "BiliNovel"
 /**
  * Add or remove modules to load as needed for local development here.
  */
-// loadAllIndividualExtensions()
-loadIndividualExtension("zh", "bilinovel")
+loadAllIndividualExtensions()
 
 /**
  * ===================================== COMMON CONFIGURATION ======================================
