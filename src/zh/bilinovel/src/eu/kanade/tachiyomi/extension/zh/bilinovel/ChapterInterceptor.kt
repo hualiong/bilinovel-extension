@@ -22,12 +22,12 @@ class ChapterInterceptor : Interceptor {
     private fun predictUrlByContext(url: HttpUrl) = when (url.fragment) {
         "prev" -> {
             val groups = CHAPTER_ID_REGEX.find(url.toString())?.groups
-            "/novel/${groups?.get(1)?.value}/${groups?.get(2)?.value?.toInt()?.plus(1)}.html"
+            "/novel/${groups?.get(1)?.value}/${groups?.get(2)?.value?.toInt()?.minus(1)}.html"
         }
 
         "next" -> {
             val groups = CHAPTER_ID_REGEX.find(url.toString())?.groups
-            "/novel/${groups?.get(1)?.value}/${groups?.get(2)?.value?.toInt()?.minus(1)}.html"
+            "/novel/${groups?.get(1)?.value}/${groups?.get(2)?.value?.toInt()?.plus(1)}.html"
         }
 
         else -> "/novel/0/0.html"
@@ -36,12 +36,10 @@ class ChapterInterceptor : Interceptor {
     override fun intercept(chain: Interceptor.Chain): Response {
         val origin = chain.request()
         regexOf(origin.url.fragment)?.let {
-            val response =
-                chain.proceed(origin.newBuilder().removeHeader("Accept-Encoding").build())
-            val url = it.find(response.body.string())?.groups?.get(1)?.value
-                ?: predictUrlByContext(origin.url)
-            return response.newBuilder().code(302)
-                .header("Location", url.replace(".", "_2.")).build()
+            val response = chain.proceed(origin)
+            val path = it.find(response.body.string())?.groups?.get(1)?.value ?: predictUrlByContext(origin.url)
+            val url = origin.url.newBuilder().encodedPath(path.replace(".", "_2.")).build()
+            return chain.proceed(origin.newBuilder().url(url).build())
         }
         return chain.proceed(origin.newBuilder().addHeader("Cookie", "night=1").build())
             .also { resp ->

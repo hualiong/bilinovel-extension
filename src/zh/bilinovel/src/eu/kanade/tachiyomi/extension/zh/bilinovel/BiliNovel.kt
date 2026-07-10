@@ -40,7 +40,7 @@ import kotlin.time.Duration.Companion.seconds
 class BiliNovel :
     HttpSource(),
     ConfigurableSource {
-    override val baseUrl = "https://m.bilinovel.com"
+    override val baseUrl = "https://www.bilinovel.com"
     override val lang = "zh"
     override val name = "哔哩轻小说"
     override val supportsLatest = true
@@ -64,7 +64,7 @@ class BiliNovel :
             it.rateLimit(s[0].toInt(), s[1].toInt().seconds) { url ->
                 url.host == baseUrl.removePrefix("https://")
             }
-        }.addNetworkInterceptor(ChapterInterceptor()).build()
+        }.addInterceptor(ChapterInterceptor()).build()
 
     // Customize
 
@@ -307,15 +307,11 @@ class BiliNovel :
     private var salt: Pair<Int, Int>? = null
     private val SManga.id get() = NOVEL_ID_REGEX.find(url)!!.groups[1]!!.value
     private val Page.ids get() = CHAPTER_IDS_REGEX.find(url)!!.groups.drop(1).map { it?.value }
-    private fun String.toHalfWidthDigits(): String = this.map { if (it in '０'..'９') it - 65248 else it }.joinToString("")
+    private fun String.toHalfWidthDigits() = this.map { if (it in '０'..'９') it - 65248 else it }.joinToString("")
 
     private fun String.convert(
         switch: Boolean = pref.getBoolean(PREF_DISPLAY_TRADITIONAL, false),
-    ): String = if (switch) {
-        this.map { c -> TRADITIONAL_CHARACTER_MAP[c] ?: c }.joinToString("")
-    } else {
-        this
-    }
+    ) = this.takeIf { switch }?.map { c -> TRADITIONAL_CHARACTER_MAP[c] ?: c }?.joinToString("") ?: this
 
     private fun Element.formatText(c: String) = this.wholeText().replace(NEWLINE_REGEX, c).trim()
 
