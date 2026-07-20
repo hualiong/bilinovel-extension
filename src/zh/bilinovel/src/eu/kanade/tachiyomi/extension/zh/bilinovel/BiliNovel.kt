@@ -58,13 +58,12 @@ class BiliNovel :
 
     private val textInterceptor = TextInterceptor(super.client, headers, pref)
 
-    override val client = super.client.newBuilder()
-        .addInterceptor(textInterceptor).also {
-            val s = pref.getString(PREF_RATE_LIMIT, "10/10")!!.split("/")
-            it.rateLimit(s[0].toInt(), s[1].toInt().seconds) { url ->
-                url.host == baseUrl.removePrefix("https://")
-            }
-        }.addInterceptor(ChapterInterceptor()).build()
+    override val client = super.client.newBuilder().also {
+        val s = pref.getString(PREF_RATE_LIMIT, "10/10")!!.split("/")
+        it.rateLimit(s[0].toInt(), s[1].toInt().seconds) { url ->
+            url.host == baseUrl.removePrefix("https://")
+        }
+    }.addInterceptor(textInterceptor).addInterceptor(ChapterInterceptor()).build()
 
     // Customize
 
