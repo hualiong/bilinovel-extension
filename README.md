@@ -26,6 +26,9 @@ https://raw.githubusercontent.com/hualiong/bilinovel-extension/main/index.min.js
 
 ## 更新日志
 
+### [1.6.22] - 2026-07-20
+- 修复请求限流设置失效
+
 ### [1.6.21] - 2026-07-10
 - 更换回[旧域名](https://www.bilinovel.com)
 - 修复部分小说章节报错
