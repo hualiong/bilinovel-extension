@@ -23,9 +23,11 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.supervisorScope
+import okhttp3.Cookie
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Response
 import org.jsoup.nodes.Document
@@ -63,9 +65,29 @@ class BiliNovel :
         it.rateLimit(s[0].toInt(), s[1].toInt().seconds) { url ->
             url.host == baseUrl.removePrefix("https://")
         }
-    }.addInterceptor(textInterceptor).addInterceptor(ChapterInterceptor()).build()
+    }.addInterceptor(textInterceptor).addNetworkInterceptor(ChapterInterceptor()).build()
 
     // Customize
+
+    private suspend fun ensureSearchTicket() {
+        val names = client.cookieJar.loadForRequest(baseUrl.toHttpUrl()).map { it.name }
+        if (!names.contains("jieqiSearchCss") || !names.contains("jieqiSearchJs")) {
+            coroutineScope {
+                launch { client.get("$baseUrl/search.html?search_guard=css", headers).close() }
+                launch {
+                    COOKIE_REGEX.find(client.get("$baseUrl/search.html?search_guard=js", headers).body.string())
+                        ?.groupValues?.get(1)
+                        ?.let { cookie ->
+                            val url = baseUrl.toHttpUrl()
+                            Cookie.parse(url, cookie)?.let { client.cookieJar.saveFromResponse(url, listOf(it)) }
+                        }
+                }
+            }
+        }
+        client.get("$baseUrl/search.html?search_guard=redeem", headers)
+        val cookies = client.cookieJar.loadForRequest(baseUrl.toHttpUrl())
+        if (cookies.find { it.name == "jieqiSearchTicket" }?.value.isNullOrEmpty()) throw Exception("获取搜索凭证失败，请稍后再试")
+    }
 
     companion object {
         const val BOOKMARK_URL =
@@ -73,6 +95,7 @@ class BiliNovel :
         val DATE_REGEX = Regex("\\d{4}-\\d{1,2}-\\d{1,2}")
         val PAGE_REGEX = Regex("第(\\d+)/(\\d+)页")
         val NOVEL_ID_REGEX = Regex("/novel/(\\d+)\\.html")
+        val COOKIE_REGEX = Regex("cookie=\"(.*?)\";")
         val CHAPTER_IDS_REGEX = Regex("/novel/(\\d+)/(\\d+)(?:_(\\d+))?\\.html")
         val PAGE_SIZE_REGEX = Regex("（\\d+/(\\d+)）")
         val EXPRESSION_REGEX = Regex("Number.*?;")
@@ -566,6 +589,7 @@ class BiliNovel :
         val request = NOVEL_ID_REGEX.find(query)?.value?.let { GET(baseUrl + it, headers) } ?: run {
             val url = baseUrl.toHttpUrl().newBuilder()
             if (query.isNotBlank()) {
+                ensureSearchTicket()
                 url.addPathSegment("search").addPathSegment("${query}_$page.html")
             } else {
                 url.addPathSegment("wenku")
