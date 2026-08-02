@@ -26,6 +26,9 @@ https://raw.githubusercontent.com/hualiong/bilinovel-extension/main/index.min.js
 
 ## 更新日志
 
+### [1.6.23] - 2026-08-02
+- 修复关键字搜索无结果
+
 ### [1.6.22] - 2026-07-20
 - 修复请求限流设置失效
 
