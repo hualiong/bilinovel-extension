@@ -97,6 +97,8 @@ class BiliNovel :
         val NOVEL_ID_REGEX = Regex("/novel/(\\d+)\\.html")
         val COOKIE_REGEX = Regex("cookie=\"(.*?)\";")
         val CHAPTER_IDS_REGEX = Regex("/novel/(\\d+)/(\\d+)(?:_(\\d+))?\\.html")
+        val PREV_URL_REGEX = Regex("url_previous:'(.*?)'")
+        val NEXT_URL_REGEX = Regex("url_next:'(.*?)'")
         val PAGE_SIZE_REGEX = Regex("（\\d+/(\\d+)）")
         val EXPRESSION_REGEX = Regex("Number.*?;")
         val SALT_REGEX = Regex("(?<![a-zA-Z0-9_])-?0x[0-9a-fA-F]+(?:[+*\\-]-?0x[0-9a-fA-F]+)+")
@@ -338,9 +340,9 @@ class BiliNovel :
     private fun Element.formatText(c: String) = this.wholeText().replace(NEWLINE_REGEX, c).trim()
 
     private fun Elements.mapToChapter(switch: Boolean, date: Long, volume: String? = null) = mapIndexed { i, element ->
-        val url = element.absUrl("href").takeUnless("javascript:cid(1)"::equals)
+        val url = element.absUrl("href")
         SChapter.create().apply {
-            setUrlWithoutDomain(url ?: getChapterUrlByContext(i, this@mapToChapter))
+            setUrlWithoutDomain(url.takeIf(CHAPTER_IDS_REGEX::containsMatchIn) ?: this@mapToChapter.getChapterUrlByContext(i))
             name = element.text().toHalfWidthDigits().convert(switch)
             date_upload = date
             volume?.let { scanlator = it.convert(switch) }
@@ -462,9 +464,20 @@ class BiliNovel :
         return result
     }
 
-    private fun getChapterUrlByContext(i: Int, els: Elements) = when (i) {
-        els.lastIndex -> "${els[i - 1].attr("href").replace(".html", "_66.html")}#next"
-        else -> "${els[i + 1].attr("href")}#prev"
+    private fun Elements.getChapterUrlByContext(i: Int): String {
+        var offset = 1
+        while (i - offset >= 0 || i + offset < size) {
+            if (i + offset < size) {
+                val href = this[i + offset].attr("href")
+                if (CHAPTER_IDS_REGEX.containsMatchIn(href)) return "$href#prev"
+            }
+            if (i - offset >= 0) {
+                val href = this[i - offset].attr("href")
+                if (CHAPTER_IDS_REGEX.containsMatchIn(href)) return "${href.replace(".html", "_66.html")}#next"
+            }
+            offset++
+        }
+        throw Exception("无法获取章节链接")
     }
 
     private fun sort(content: Element, chapterId: Int): String {
@@ -641,12 +654,10 @@ class BiliNovel :
     // Manga View Page
 
     override suspend fun getPageList(chapter: SChapter): List<Page> {
-        val response = client.get(
-            baseUrl + chapter.url.let {
-                if (it.contains("#")) it else it.replace(".", "_2.")
-            },
-            headers,
-        )
+        val url = chapter.url.let {
+            if (it.contains("#")) resolveChapterUrl(it) else it
+        }
+        val response = client.get(baseUrl + url.replace(".", "_2."), headers)
         return response.asJsoup().let { doc ->
             doc.selectFirst("#acontent > .center-note")?.run { throw Exception(text()) }
             val size = PAGE_SIZE_REGEX.find(doc.selectText("#atitle")!!)!!.groups[1]!!.value
@@ -655,6 +666,26 @@ class BiliNovel :
                 Page(i, prefix + "${if (i > 0) "_${i + 1}" else ""}.html")
             }
         }
+    }
+
+    /**
+     * 章节链接为占位符（如 javascript:cid(0/1)）时，目录解析会以相邻章节的链接加
+     * "#prev"/"#next" 标记代替。这里请求相邻章节页面，通过其 url_previous/url_next
+     * 导航链接反查出真实章节地址（章节 id 可能存在跳号，不能简单按相邻 id 推算）。
+     */
+    private suspend fun resolveChapterUrl(url: String): String {
+        val fragment = url.substringAfter('#')
+        val neighborPath = url.substringBefore('#')
+        val regex = if (fragment == "next") NEXT_URL_REGEX else PREV_URL_REGEX
+        val body = client.get(baseUrl + neighborPath, headers).body.string()
+        return regex.find(body)?.groups?.get(1)?.value ?: predictUrlByContext(neighborPath, fragment)
+    }
+
+    private fun predictUrlByContext(neighborPath: String, fragment: String): String {
+        val groups = CHAPTER_IDS_REGEX.find(neighborPath)?.groups
+            ?: throw Exception("无法获取章节链接")
+        val delta = if (fragment == "next") 1 else -1
+        return "/novel/${groups[1]!!.value}/${groups[2]!!.value.toInt() + delta}.html"
     }
 
     // Image

@@ -1,46 +1,13 @@
 package eu.kanade.tachiyomi.extension.zh.bilinovel
 
-import okhttp3.HttpUrl
 import okhttp3.Interceptor
 import okhttp3.Response
 import java.io.IOException
 
 class ChapterInterceptor : Interceptor {
 
-    companion object {
-        val PREV_URL_REGEX = Regex("url_previous:'(.*?)'")
-        val NEXT_URL_REGEX = Regex("url_next:'(.*?)'")
-        val CHAPTER_ID_REGEX = Regex("/novel/(\\d+)/(\\d+)\\.html")
-    }
-
-    private fun regexOf(str: String?) = when (str) {
-        "prev" -> PREV_URL_REGEX
-        "next" -> NEXT_URL_REGEX
-        else -> null
-    }
-
-    private fun predictUrlByContext(url: HttpUrl) = when (url.fragment) {
-        "prev" -> {
-            val groups = CHAPTER_ID_REGEX.find(url.toString())?.groups
-            "/novel/${groups?.get(1)?.value}/${groups?.get(2)?.value?.toInt()?.minus(1)}.html"
-        }
-
-        "next" -> {
-            val groups = CHAPTER_ID_REGEX.find(url.toString())?.groups
-            "/novel/${groups?.get(1)?.value}/${groups?.get(2)?.value?.toInt()?.plus(1)}.html"
-        }
-
-        else -> "/novel/0/0.html"
-    }
-
     override fun intercept(chain: Interceptor.Chain): Response {
         val origin = chain.request()
-        regexOf(origin.url.fragment)?.let {
-            val response = chain.proceed(origin.newBuilder().removeHeader("Content-Encoding").build())
-            val path = it.find(response.body.string())?.groups?.get(1)?.value ?: predictUrlByContext(origin.url)
-            val url = origin.url.newBuilder().encodedPath(path.replace(".", "_2.")).build()
-            return chain.proceed(origin.newBuilder().url(url).build())
-        }
         return chain.proceed(origin.newBuilder().addHeader("Cookie", "night=1").build())
             .also { resp ->
                 if (resp.isRedirect && resp.header("Location")?.indexOf("linovelib") != -1) {
