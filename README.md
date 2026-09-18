@@ -26,6 +26,10 @@ https://raw.githubusercontent.com/hualiong/bilinovel-extension/main/index.min.js
 
 ## 更新日志
 
+### [1.6.25] - 2026-09-18
+- 添加镜像网址（<https://www.bilinovel.net>）
+- 现在如果没登录，设置里的“自动标记书签”将会被禁用
+
 ### [1.6.24] - 2026-08-22
 - 修复部分小说章节报错
 
