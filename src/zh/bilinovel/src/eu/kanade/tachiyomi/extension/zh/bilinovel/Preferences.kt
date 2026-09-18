@@ -8,6 +8,7 @@ import androidx.preference.ListPreference
 import androidx.preference.MultiSelectListPreference
 import androidx.preference.SwitchPreferenceCompat
 
+const val PREF_MIRROR_URLS = "MIRROR_URLS"
 const val PREF_POPULAR_DISPLAY = "POPULAR_DISPLAY"
 const val PREF_SCREEN_STYLE = "SCREEN_STYLE"
 const val PREF_DISPLAY_TRADITIONAL = "DISPLAY_TRADITIONAL"
@@ -21,8 +22,17 @@ val STYLE_REGEX = Regex("^#[0-9A-F]{6} #[0-9A-F]{6} (?:\\d+|\\d+\\.\\d+) (?:\\d+
 val RATE_LIMIT_REGEX = Regex("^\\d+/\\d+$")
 
 val DEFAULT_SET = setOf("A", "B", "C")
+val MIRROR_URLS = arrayOf("https://www.bilinovel.com", "https://www.bilinovel.net")
 
-fun preferencesInternal(context: Context, pref: SharedPreferences) = arrayOf(
+fun preferencesInternal(context: Context, pref: SharedPreferences, isLoggedIn: Boolean) = arrayOf(
+    ListPreference(context).apply {
+        key = PREF_MIRROR_URLS
+        title = "镜像站点"
+        summary = "%s"
+        entries = MIRROR_URLS.map { it.removePrefix("https://") }.toTypedArray()
+        entryValues = MIRROR_URLS
+        setDefaultValue("https://www.bilinovel.com")
+    },
     ListPreference(context).apply {
         key = PREF_POPULAR_DISPLAY
         title = "热门显示内容"
@@ -115,13 +125,14 @@ fun preferencesInternal(context: Context, pref: SharedPreferences) = arrayOf(
     SwitchPreferenceCompat(context).apply {
         key = PREF_LOAD_ALL_IMAGES
         title = "确保加载所有插图"
-        summary = "一旦有插图加载失败，不再用空白图占位，而是可以进行重试，直到加载完所有插图"
+        summary = "一旦有插图加载失败，不再用空白图占位，而是直接报错，确保用户可以重试，从而加载完所有插图"
         setDefaultValue(false)
     },
     SwitchPreferenceCompat(context).apply {
         key = PREF_AUTO_BOOKMARK
         title = "自动标记书签（源站功能）"
         summary = "阅读任一章节时，自动调用源站的“书签”功能标记该章节（不建议将章节下载后阅读，会导致超前标记）\n注：该功能需在 WebView 中登录，否则将自动关闭"
+        setEnabled(isLoggedIn)
         setDefaultValue(false)
         setOnPreferenceChangeListener { _, newVal ->
             if (newVal as Boolean) {

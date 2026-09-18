@@ -42,15 +42,16 @@ import kotlin.time.Duration.Companion.seconds
 class BiliNovel :
     HttpSource(),
     ConfigurableSource {
-    override val baseUrl = "https://www.bilinovel.com"
     override val lang = "zh"
     override val name = "哔哩轻小说"
     override val supportsLatest = true
 
     private val pref by getPreferencesLazy()
+    override val baseUrl get() = pref.getString(PREF_MIRROR_URLS, MIRROR_URLS.first())!!
 
     override fun setupPreferenceScreen(screen: PreferenceScreen) {
-        preferencesInternal(screen.context, pref).forEach(screen::addPreference)
+        val isLoggedIn = client.cookieJar.loadForRequest(baseUrl.toHttpUrl()).any { it.name == "jieqiUserInfo" }
+        preferencesInternal(screen.context, pref, isLoggedIn).forEach(screen::addPreference)
     }
 
     override fun headersBuilder() = super.headersBuilder()
@@ -84,14 +85,13 @@ class BiliNovel :
                 }
             }
         }
-        client.get("$baseUrl/search.html?search_guard=redeem", headers)
+        client.get("$baseUrl/search.html?search_guard=redeem", headers).close()
         val cookies = client.cookieJar.loadForRequest(baseUrl.toHttpUrl())
         if (cookies.find { it.name == "jieqiSearchTicket" }?.value.isNullOrEmpty()) throw Exception("获取搜索凭证失败，请稍后再试")
     }
 
     companion object {
-        const val BOOKMARK_URL =
-            "%s/modules/article/addbookcase.php?bid=%s&cid=%s&pid=1&ajax_request=1"
+        const val BOOKMARK_URL = "%s/modules/article/addbookcase.php?bid=%s&cid=%s&pid=1&ajax_request=1"
         val DATE_REGEX = Regex("\\d{4}-\\d{1,2}-\\d{1,2}")
         val PAGE_REGEX = Regex("第(\\d+)/(\\d+)页")
         val NOVEL_ID_REGEX = Regex("/novel/(\\d+)\\.html")
@@ -333,7 +333,7 @@ class BiliNovel :
 
     private fun String.convert(
         switch: Boolean = pref.getBoolean(PREF_DISPLAY_TRADITIONAL, false),
-    ) = this.takeIf { switch }?.map { c -> TRADITIONAL_CHARACTER_MAP[c] ?: c }?.joinToString("") ?: this
+    ) = this.takeIf { switch }?.map { c -> TRADITIONAL_CHARACTER_MAP.getOrDefault(c, c) }?.joinToString("") ?: this
 
     private fun Element.formatText(c: String) = this.wholeText().replace(NEWLINE_REGEX, c).trim()
 
