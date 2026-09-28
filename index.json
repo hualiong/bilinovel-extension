@@ -4,7 +4,7 @@
     "pkg": "eu.kanade.tachiyomi.extension.zh.bilinovel",
     "apk": "tachiyomi-zh.bilinovel-v1.6.25.apk",
     "lang": "zh",
-    "code": 25,
+    "code": 106025,
     "version": "1.6.25",
     "nsfw": 0,
     "sources": [
@@ -19,10 +19,10 @@
   {
     "name": "Tachiyomi: FantasyNovel",
     "pkg": "eu.kanade.tachiyomi.extension.zh.huanmengacg",
-    "apk": "tachiyomi-zh.huanmengacg-v1.4.2.apk",
+    "apk": "tachiyomi-zh.huanmengacg-v1.6.2.apk",
     "lang": "zh",
-    "code": 2,
-    "version": "1.4.2",
+    "code": 106002,
+    "version": "1.6.2",
     "nsfw": 0,
     "sources": [
       {
@@ -30,6 +30,29 @@
         "lang": "zh",
         "name": "幻梦轻小说",
         "baseUrl": "https://www.huanmengacg.com"
+      }
+    ]
+  },
+  {
+    "name": "Tachiyomi: Hikarinagi",
+    "pkg": "eu.kanade.tachiyomi.extension.zh.hikarinagi",
+    "apk": "tachiyomi-zh.hikarinagi-v1.6.2.apk",
+    "lang": "zh",
+    "code": 106002,
+    "version": "1.6.2",
+    "nsfw": 1,
+    "sources": [
+      {
+        "id": "3266193817034354049",
+        "lang": "zh",
+        "name": "Hikarinagi",
+        "baseUrl": "https://www.hikarinagi.org"
+      },
+      {
+        "id": "1148300780955902112",
+        "lang": "zh",
+        "name": "Hikarinagi Novels",
+        "baseUrl": "https://www.hikarinagi.org"
       }
     ]
   }
