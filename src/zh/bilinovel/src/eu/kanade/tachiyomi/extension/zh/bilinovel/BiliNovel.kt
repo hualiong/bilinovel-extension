@@ -13,6 +13,7 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.source.online.HttpSource
 import eu.kanade.tachiyomi.util.asJsoup
+import keiyoushi.annotation.Source
 import keiyoushi.network.rateLimit
 import keiyoushi.utils.get
 import keiyoushi.utils.getPreferencesLazy
@@ -39,15 +40,13 @@ import java.util.TimeZone
 import kotlin.math.floor
 import kotlin.time.Duration.Companion.seconds
 
-class BiliNovel :
+@Source
+abstract class BiliNovel :
     HttpSource(),
     ConfigurableSource {
-    override val lang = "zh"
-    override val name = "哔哩轻小说"
     override val supportsLatest = true
 
     private val pref by getPreferencesLazy()
-    override val baseUrl get() = pref.getString(PREF_MIRROR_URLS, MIRROR_URLS.first())!!
 
     override fun setupPreferenceScreen(screen: PreferenceScreen) {
         val isLoggedIn = client.cookieJar.loadForRequest(baseUrl.toHttpUrl()).any { it.name == "jieqiUserInfo" }

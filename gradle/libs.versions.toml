@@ -1,11 +1,14 @@
 [versions]
-android-gradle = "9.2.1"
-coroutines = "1.10.2"
+android-gradle = "9.4.1"
+coroutines = "1.11.0"
 junit = "4.13.2"
-kotlin-gradle = "2.3.21"
+kotlin-gradle = "2.4.10"
+ksp = "2.3.9"
+kotlinpoet = "2.3.0"
 ktlint = "1.8.0"
-spotless = "8.5.0"
+spotless = "8.10.1"
 tapmoc = "0.4.2"
+okhttp = "5.4.0"
 
 # 1.8 and beyond switched to `all-compatibility` mode
 # https://github.com/Kotlin/kotlinx.serialization/blob/master/CHANGELOG.md#generate-java-8s-default-method-implementations-in-interfaces
@@ -16,8 +19,13 @@ serialization = "1.7.3"
 
 [libraries]
 android-gradle = { module = "com.android.tools.build:gradle", version.ref = "android-gradle" }
+apksig = { module = "com.android.tools.build:apksig", version.ref = "android-gradle" }
+proguard = { module = "com.guardsquare:proguard-base", version = "7.10.0" }
 junit = { module = "junit:junit", version.ref = "junit" }
 kotlin-gradle = { module = "org.jetbrains.kotlin:kotlin-gradle-plugin", version.ref = "kotlin-gradle" }
+ksp-api = { module = "com.google.devtools.ksp:symbol-processing-api", version.ref = "ksp" }
+ksp-gradle = { module = "com.google.devtools.ksp:symbol-processing-gradle-plugin", version.ref = "ksp" }
+kotlinpoet-ksp = { module = "com.squareup:kotlinpoet-ksp", version.ref = "kotlinpoet" }
 ktlint-bom = { module = "com.pinterest.ktlint:ktlint-bom", version.ref = "ktlint" }
 spotless-gradle = { module = "com.diffplug.spotless:spotless-plugin-gradle", version.ref = "spotless" }
 tapmoc-gradle = { module = "com.gradleup.tapmoc:tapmoc-gradle-plugin", version.ref = "tapmoc" }
@@ -25,18 +33,24 @@ tapmoc-gradle = { module = "com.gradleup.tapmoc:tapmoc-gradle-plugin", version.r
 coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "coroutines" }
 coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
 injekt-core = { module = "com.github.null2264.injekt:injekt-core", version = "4135455a2a" }
-jsoup = { module = "org.jsoup:jsoup", version = "1.22.1" }
+jsoup = { module = "org.jsoup:jsoup", version = "1.22.2" }
 kotlin-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "serialization" }
 kotlin-protobuf = { module = "org.jetbrains.kotlinx:kotlinx-serialization-protobuf", version.ref = "serialization" }
 kotlin-json-okio = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json-okio", version.ref = "serialization" }
 kotlin-stdlib = { module = "org.jetbrains.kotlin:kotlin-stdlib-jdk8", version.ref = "kotlin-gradle" }
-okhttp = { module = "com.squareup.okhttp3:okhttp", version = "5.3.2" }
+okhttp-core = { module = "com.squareup.okhttp3:okhttp", version.ref = "okhttp" }
+okhttp-brotli = { module = "com.squareup.okhttp3:okhttp-brotli", version.ref = "okhttp" }
 quickjs = { module = "app.cash.quickjs:quickjs-android", version = "0.9.2" }
 rxjava = { module = "io.reactivex:rxjava", version = "1.3.8" }
-tachiyomi-lib = { module = "com.github.mihonapp:tachiyomix", version = "1.6.0" }
+# The source API this repo's extensions are written against (suspend based HttpSource, no KeiSource).
+# `libVersion = "1.6"` extensions use this.
+tachiyomi-lib-v16 = { module = "com.github.mihonapp:tachiyomix", version = "1.6.0" }
+# Classic request/parse extensions-lib, used by `libVersion = "1.4"` extensions.
+#noinspection SimilarGradleDependency
+tachiyomi-lib-v14 = { module = "com.github.keiyoushi:extensions-lib", version = "18a8e26be2" }
 
 # Required by Kotlin 2.x compiler to resolve type-use annotations (e.g. org.jspecify.annotations.Nullable) used in Jsoup's API signatures
-jspecify = { module = "org.jspecify:jspecify", version = "1.0.0" }
+jspecify = { module = "org.jspecify:jspecify", version = "1.0.1" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "android-gradle" }
@@ -44,7 +58,8 @@ android-library = { id = "com.android.library", version.ref = "android-gradle" }
 kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin-gradle" }
 kotlin-samWithReceiver = { id = "org.jetbrains.kotlin.plugin.sam.with.receiver", version.ref = "kotlin-gradle" }
 kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin-gradle" }
+ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
 spotless = { id = "com.diffplug.spotless", version.ref = "spotless" }
 
 [bundles]
-common = ["kotlin-stdlib", "coroutines-core", "coroutines-android", "injekt-core", "rxjava", "kotlin-protobuf", "kotlin-json", "kotlin-json-okio", "jsoup", "jspecify", "okhttp", "tachiyomi-lib", "quickjs"]
+common = ["kotlin-stdlib", "coroutines-core", "coroutines-android", "injekt-core", "rxjava", "kotlin-protobuf", "kotlin-json", "kotlin-json-okio", "jsoup", "jspecify", "okhttp-core", "okhttp-brotli", "quickjs"]

@@ -1,8 +1,0 @@
-ext {
-    extName = 'BiliNovel'
-    extClass = '.BiliNovel'
-    extVersionCode = 25
-    isNsfw = false
-}
-
-apply plugin: "kei.plugins.extension.legacy"

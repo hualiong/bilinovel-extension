@@ -23,10 +23,14 @@ dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
     @Suppress("UnstableApiUsage")
     repositories {
+        // Google Maven is unreachable from the JVM on this machine, so keep its mirror first.
         maven("https://maven.aliyun.com/repository/google")
-        maven("https://maven.aliyun.com/repository/public")
         google()
+        // Maven Central must come before the Aliyun mirrors: ktlint's metadata there is complete,
+        // while the mirror's produced an incomplete formatter classpath for Spotless
+        // (NoClassDefFoundError from ktlint). The mirrors below are fallbacks only.
         mavenCentral()
+        maven("https://maven.aliyun.com/repository/public")
         maven("https://www.jitpack.io")
     }
 }
@@ -44,6 +48,7 @@ loadAllIndividualExtensions()
  * ===================================== COMMON CONFIGURATION ======================================
  */
 include(":core")
+include(":compiler")
 
 // Load all modules under /lib
 File(rootDir, "lib").eachDir { include("lib:${it.name}") }

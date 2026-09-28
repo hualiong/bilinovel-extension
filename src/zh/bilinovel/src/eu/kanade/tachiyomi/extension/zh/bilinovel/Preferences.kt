@@ -8,7 +8,6 @@ import androidx.preference.ListPreference
 import androidx.preference.MultiSelectListPreference
 import androidx.preference.SwitchPreferenceCompat
 
-const val PREF_MIRROR_URLS = "MIRROR_URLS"
 const val PREF_POPULAR_DISPLAY = "POPULAR_DISPLAY"
 const val PREF_SCREEN_STYLE = "SCREEN_STYLE"
 const val PREF_DISPLAY_TRADITIONAL = "DISPLAY_TRADITIONAL"
@@ -22,17 +21,8 @@ val STYLE_REGEX = Regex("^#[0-9A-F]{6} #[0-9A-F]{6} (?:\\d+|\\d+\\.\\d+) (?:\\d+
 val RATE_LIMIT_REGEX = Regex("^\\d+/\\d+$")
 
 val DEFAULT_SET = setOf("A", "B", "C")
-val MIRROR_URLS = arrayOf("https://www.bilinovel.com", "https://www.bilinovel.net")
 
 fun preferencesInternal(context: Context, pref: SharedPreferences, isLoggedIn: Boolean) = arrayOf(
-    ListPreference(context).apply {
-        key = PREF_MIRROR_URLS
-        title = "镜像站点"
-        summary = "%s"
-        entries = MIRROR_URLS.map { it.removePrefix("https://") }.toTypedArray()
-        entryValues = MIRROR_URLS
-        setDefaultValue("https://www.bilinovel.com")
-    },
     ListPreference(context).apply {
         key = PREF_POPULAR_DISPLAY
         title = "热门显示内容"

@@ -10,6 +10,7 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.HttpSource
 import eu.kanade.tachiyomi.util.asJsoup
+import keiyoushi.annotation.Source
 import keiyoushi.utils.getPreferencesLazy
 import keiyoushi.utils.tryParse
 import okhttp3.HttpUrl.Companion.toHttpUrl
@@ -20,10 +21,10 @@ import java.text.SimpleDateFormat
 import java.util.Locale
 import kotlin.let
 
-class FantasyNovel : HttpSource(), ConfigurableSource {
-    override val baseUrl = "https://www.huanmengacg.com"
-    override val lang = "zh"
-    override val name = "幻梦轻小说"
+@Source
+abstract class FantasyNovel :
+    HttpSource(),
+    ConfigurableSource {
     override val supportsLatest = true
 
     private val pref by getPreferencesLazy()
@@ -77,8 +78,7 @@ class FantasyNovel : HttpSource(), ConfigurableSource {
 
     // Latest Page
 
-    override fun latestUpdatesRequest(page: Int) =
-        GET("$baseUrl/index.php/book/category/order/addtime/page/$page")
+    override fun latestUpdatesRequest(page: Int) = GET("$baseUrl/index.php/book/category/order/addtime/page/$page")
 
     override fun latestUpdatesParse(response: Response) = popularMangaParse(response)
 

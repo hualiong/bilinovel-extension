@@ -1,11 +1,12 @@
 plugins {
     alias(libs.plugins.kotlin.jvm)
     alias(libs.plugins.kotlin.samWithReceiver)
+    alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.spotless)
     `java-gradle-plugin`
 }
 
-// Configuration should be synced with [/gradle/build-logic/src/main/kotlin/PluginSpotless.kt]
+// Configuration should be synced with [/gradle/build-logic/src/main/kotlin/SpotlessPlugin.kt]
 val ktlintVersion = libs.ktlint.bom.get().version
 val editorConfigFile = rootProject.file("../../.editorconfig")
 spotless {
@@ -27,6 +28,9 @@ dependencies {
     compileOnly(gradleKotlinDsl())
     compileOnly(libs.android.gradle)
     compileOnly(libs.kotlin.gradle)
+    implementation(libs.apksig)
+    implementation(libs.ksp.gradle)
+    implementation(libs.kotlin.json)
     implementation(libs.spotless.gradle)
     implementation(libs.tapmoc.gradle)
 
@@ -43,23 +47,23 @@ gradlePlugin {
     plugins {
         register("android-base") {
             id = kei.plugins.android.base.get().pluginId
-            implementationClass = "PluginAndroidBase"
+            implementationClass = "AndroidBasePlugin"
         }
         register("extension") {
-            id = kei.plugins.extension.legacy.get().pluginId
-            implementationClass = "PluginExtensionLegacy"
+            id = kei.plugins.extension.get().pluginId
+            implementationClass = "ExtensionPlugin"
         }
         register("library") {
             id = kei.plugins.library.get().pluginId
-            implementationClass = "PluginLibrary"
-        }
-        register("multisrc") {
-            id = kei.plugins.multisrc.get().pluginId
-            implementationClass = "PluginMultiSrc"
+            implementationClass = "LibraryPlugin"
         }
         register("spotless") {
             id = kei.plugins.spotless.get().pluginId
-            implementationClass = "PluginSpotless"
+            implementationClass = "SpotlessPlugin"
+        }
+        register("theme") {
+            id = kei.plugins.multisrc.get().pluginId
+            implementationClass = "ThemePlugin"
         }
     }
 }

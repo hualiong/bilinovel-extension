@@ -173,9 +173,7 @@ class HtmlInterceptor(
     /**
      * 从HTML中提取所有图片URL
      */
-    private fun extractImageUrls(html: String): List<String> {
-        return URL_REGEX.findAll(html).map { it.groupValues[1] }.toMutableList()
-    }
+    private fun extractImageUrls(html: String): List<String> = URL_REGEX.findAll(html).map { it.groupValues[1] }.toMutableList()
 
     /**
      * 加载单个图片
@@ -260,7 +258,5 @@ class HtmlInterceptor(
 object HtmlInterceptorHelper {
     const val HOST = "bilinovel-htmlinterceptor"
 
-    fun createUrl(title: String, text: String): String {
-        return "http://$HOST/" + Uri.encode(title) + "/" + Uri.encode(text)
-    }
+    fun createUrl(title: String, text: String): String = "http://$HOST/" + Uri.encode(title) + "/" + Uri.encode(text)
 }
