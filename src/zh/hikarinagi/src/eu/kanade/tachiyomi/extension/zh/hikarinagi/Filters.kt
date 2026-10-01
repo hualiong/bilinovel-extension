@@ -10,9 +10,10 @@ interface QueryParamFilter {
 class SortFilter(select: Selection? = null) :
     Filter.Sort("排序", arrayOf("更新时间", "热度", "收录时间", "发布时间", "标题"), select),
     QueryParamFilter {
-    private val sort = arrayOf("latest_chapter_at", "heat", "created_at", "publication_date", "title")
+    // The site sorts by "name"; "title" is silently ignored by the API.
+    private val sort = arrayOf("latest_chapter_at", "heat", "created_at", "publication_date", "name")
 
-    override fun toQueryParam() = "sort" to (state?.let { "${sort[it.index]}:${if (it.ascending) "asc" else "dssc"}" } ?: "latest_chapter_at:desc")
+    override fun toQueryParam() = "sort" to (state?.let { "${sort[it.index]}:${if (it.ascending) "asc" else "desc"}" } ?: "latest_chapter_at:desc")
 }
 
 class RegionFilter :

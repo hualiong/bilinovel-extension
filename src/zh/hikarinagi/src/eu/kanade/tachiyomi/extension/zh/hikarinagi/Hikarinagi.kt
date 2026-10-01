@@ -20,6 +20,7 @@ import keiyoushi.utils.getLong
 import keiyoushi.utils.getObject
 import keiyoushi.utils.getPreferencesLazy
 import keiyoushi.utils.getString
+import keiyoushi.utils.getStringOrNull
 import keiyoushi.utils.obj
 import keiyoushi.utils.parseAs
 import keiyoushi.utils.toJsonRequestBody
@@ -55,6 +56,7 @@ abstract class Hikarinagi :
     override val client = super.client.newBuilder()
         .addInterceptor(NovelTextInterceptor(preferences))
         .addInterceptor(NovelImageInterceptor())
+        .addInterceptor(MangaImageInterceptor(baseUrl, headers))
         .build()
 
     companion object {
@@ -63,7 +65,12 @@ abstract class Hikarinagi :
         /** Must match the light novel source's name in `build.gradle.kts`. */
         const val NOVEL_SOURCE_NAME = "Hikarinagi Novels"
 
+        /** Also read by [MangaImageInterceptor], which reports the same login problem. */
+        internal const val LOGIN_MESSAGE = "请先在 WebView 中登录"
+
         private const val UNAVAILABLE_MESSAGE = "未收录本卷内容，暂无在线阅读"
+
+        private const val BROKEN_VOLUME_MESSAGE = "本卷文件损坏，暂时无法阅读"
     }
 
     private fun String?.ifNotBlank(action: (String) -> Unit) = this?.takeIf(String::isNotBlank)?.let(action)
@@ -160,25 +167,46 @@ abstract class Hikarinagi :
     override suspend fun getPageList(chapter: SChapter): List<Page> = if (isNovelMode) {
         getNovelPageList(chapter)
     } else {
-        val response = client.get("$baseUrl/api/pages/mangas/reader/${chapter.memo.getString("cid")}/${chapter.url}", ensureSuccess = false)
-        if (response.code == 401) throw Exception("请先在 WebView 中登录")
-        val urls = response.parseAs<JsonObject>().getObject("manifest").getArray("pages").map { it.obj.getString("src") }
-        List(urls.size) { Page(it, imageUrl = urls[it]) }
+        val cid = chapter.memo.getString("cid")
+        val response = client.get("$baseUrl/api/pages/mangas/reader/$cid/${chapter.url}", ensureSuccess = false)
+        if (!response.isSuccessful) {
+            val code = response.code
+            response.close()
+            throw Exception(if (code == 401) LOGIN_MESSAGE else "获取章节失败（HTTP $code）")
+        }
+        // A page only carries its id; the image itself comes from an encrypted POST, see MangaImageInterceptor.
+        response.parseAs<JsonObject>().getObject("manifest").getArray("pages").mapIndexed { index, page ->
+            with(page.obj) {
+                Page(index, imageUrl = MangaImageInterceptor.createUrl(cid, chapter.url, getInt("id").toString(), getStringOrNull("mime_type")))
+            }
+        }
     }
 
-    /** The volume's EPUB sits behind a short lived signed URL that needs the login session. */
+    /** The volume's EPUB sits behind a short lived reader session that needs the login session. */
     private suspend fun getNovelPageList(chapter: SChapter): List<Page> {
         if (chapter.memo.getBooleanOrNull("unavailable") == true) throw Exception(UNAVAILABLE_MESSAGE)
 
         val body = buildJsonObject { put("volume_id", chapter.url.toInt()) }.toJsonRequestBody()
         val session = client.post("$baseUrl/api/v3/reader/sessions", body, ensureSuccess = false)
-        if (session.code == 401) throw Exception("请先在 WebView 中登录")
-        // READER_EPUB_NOT_AVAILABLE, e.g. when the volume lost its EPUB after the chapter list was cached.
-        if (session.code == 404) throw Exception(UNAVAILABLE_MESSAGE)
+        if (!session.isSuccessful) {
+            val code = session.code
+            session.close()
+            throw Exception(
+                when (code) {
+                    401 -> LOGIN_MESSAGE
+                    // READER_EPUB_NOT_AVAILABLE, e.g. when the volume lost its EPUB after the chapter list was cached.
+                    404 -> UNAVAILABLE_MESSAGE
+                    else -> "获取分卷失败（HTTP $code）"
+                },
+            )
+        }
 
-        val epubUrl = session.parseAs<JsonObject>().getObject("data").getString("url")
-        val chapters = client.get(epubUrl).use { readEpubChapters(it.body.byteStream()) }
-        return buildPages(chapters)
+        val data = session.parseAs<JsonObject>().getObject("data")
+        val id = data.getString("id")
+        val epub = client.get("$baseUrl/api/v3/reader/sessions/$id/content").use {
+            ReaderCrypto.decrypt(data.getString("p"), it.body.bytes(), id)
+        }
+        return buildPages(readEpubChapters(epub.inputStream())).ifEmpty { throw Exception(BROKEN_VOLUME_MESSAGE) }
     }
 
     private fun buildPages(chapters: List<EpubChapter>): List<Page> {

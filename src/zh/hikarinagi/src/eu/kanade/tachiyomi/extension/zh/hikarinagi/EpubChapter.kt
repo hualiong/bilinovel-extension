@@ -31,7 +31,8 @@ private val IMAGE_EXTENSIONS = setOf("jpg", "jpeg", "png", "gif", "webp")
 fun readEpubChapters(input: InputStream): List<EpubChapter> {
     val documents = mutableMapOf<String, String>()
     val images = mutableMapOf<String, ByteArray>()
-    ZipInputStream(input).use { zip ->
+    // Some volumes are stored exactly as they were uploaded, the multipart wrapper still around the archive.
+    ZipInputStream(input.readBytes().fromArchiveStart().inputStream()).use { zip ->
         while (true) {
             val entry = zip.nextEntry ?: break
             if (entry.isDirectory) continue
@@ -93,3 +94,16 @@ private fun Element.toImageBlock(base: String, images: Map<String, ByteArray>): 
 }
 
 private fun resolveEpubPath(baseDir: String, href: String): String = Paths.get(baseDir, href.removePrefix("/")).normalize().toString()
+
+private val ZIP_LOCAL_HEADER = byteArrayOf(0x50, 0x4B, 0x03, 0x04)
+
+/** Cuts the upload wrapper some volumes keep in front of the archive; a plain EPUB is left untouched. */
+private fun ByteArray.fromArchiveStart(): ByteArray {
+    for (start in 0..size - ZIP_LOCAL_HEADER.size) {
+        if (ZIP_LOCAL_HEADER.indices.all { this[start + it] == ZIP_LOCAL_HEADER[it] }) {
+            // A plain EPUB already starts at the archive, so there is nothing to cut away.
+            return if (start == 0) this else copyOfRange(start, size)
+        }
+    }
+    return this
+}
