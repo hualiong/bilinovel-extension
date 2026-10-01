@@ -17,23 +17,6 @@
     ]
   },
   {
-    "name": "Tachiyomi: FantasyNovel",
-    "pkg": "eu.kanade.tachiyomi.extension.zh.huanmengacg",
-    "apk": "tachiyomi-zh.huanmengacg-v1.6.2.apk",
-    "lang": "zh",
-    "code": 106002,
-    "version": "1.6.2",
-    "nsfw": 0,
-    "sources": [
-      {
-        "id": "2861182842757929551",
-        "lang": "zh",
-        "name": "幻梦轻小说",
-        "baseUrl": "https://www.huanmengacg.com"
-      }
-    ]
-  },
-  {
     "name": "Tachiyomi: Hikarinagi",
     "pkg": "eu.kanade.tachiyomi.extension.zh.hikarinagi",
     "apk": "tachiyomi-zh.hikarinagi-v1.6.3.apk",
@@ -53,6 +36,23 @@
         "lang": "zh",
         "name": "Hikarinagi Novels",
         "baseUrl": "https://www.hikarinagi.org"
+      }
+    ]
+  },
+  {
+    "name": "Tachiyomi: FantasyNovel",
+    "pkg": "eu.kanade.tachiyomi.extension.zh.huanmengacg",
+    "apk": "tachiyomi-zh.huanmengacg-v1.6.2.apk",
+    "lang": "zh",
+    "code": 106002,
+    "version": "1.6.2",
+    "nsfw": 0,
+    "sources": [
+      {
+        "id": "2861182842757929551",
+        "lang": "zh",
+        "name": "幻梦轻小说",
+        "baseUrl": "https://www.huanmengacg.com"
       }
     ]
   }
