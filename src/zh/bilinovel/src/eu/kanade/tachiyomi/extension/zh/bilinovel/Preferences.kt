@@ -12,7 +12,7 @@ const val PREF_POPULAR_DISPLAY = "POPULAR_DISPLAY"
 const val PREF_SCREEN_STYLE = "SCREEN_STYLE"
 const val PREF_DISPLAY_TRADITIONAL = "DISPLAY_TRADITIONAL"
 const val PREF_DESCRIPTION = "DESCRIPTION"
-const val PREF_DARK_MODE = "DARK_MODE"
+const val PREF_DARK_MODE = "DARK_MODE_V2"
 const val PREF_RATE_LIMIT = "RATE_LIMIT"
 const val PREF_AUTO_BOOKMARK = "AUTO_BOOKMARK"
 const val PREF_LOAD_ALL_IMAGES = "LOAD_ALL_IMAGES"
@@ -20,7 +20,47 @@ const val PREF_LOAD_ALL_IMAGES = "LOAD_ALL_IMAGES"
 val STYLE_REGEX = Regex("^#[0-9A-F]{6} #[0-9A-F]{6} (?:\\d+|\\d+\\.\\d+) (?:\\d+|\\d+\\.\\d+)$", RegexOption.IGNORE_CASE)
 val RATE_LIMIT_REGEX = Regex("^\\d+/\\d+$")
 
+/** Background, text colour, heading size and body size; the renderer reads the same default. */
+const val DEFAULT_SCREEN_STYLE = "#FAFAF8 #000000 56 40"
+
+/** The sizes the extension shipped before the renderer took the light novel layout. */
+private const val LEGACY_HEADING_SIZE = 52f
+private const val LEGACY_BODY_SIZE = 30f
+
+private const val DARK_APP = "app"
+private const val DARK_ALWAYS = "always"
+private const val DARK_NEVER = "never"
+
 val DEFAULT_SET = setOf("A", "B", "C")
+
+/**
+ * Carries the settings of an older extension version over to the current defaults.
+ *
+ * The two sizes are judged on their own: a size still sitting at the old default is one the reader
+ * never changed, so it follows the new default, while a size they set themselves is left alone. The
+ * colours they chose are kept. The old dark mode was a switch, and becomes a choice.
+ */
+fun SharedPreferences.migratePreferences() {
+    val storedDark = all[PREF_DARK_MODE]
+    if (storedDark is Boolean) {
+        // A switch from the old version, which had no "follow the reader" option.
+        edit().putString(PREF_DARK_MODE, if (storedDark) DARK_ALWAYS else DARK_NEVER).apply()
+    }
+    val style = getString(PREF_SCREEN_STYLE, null)?.split(' ') ?: return
+    if (style.size != 4) return
+    val sizes = DEFAULT_SCREEN_STYLE.split(' ')
+    val heading = if (style[2].toFloatOrNull() == LEGACY_HEADING_SIZE) sizes[2] else style[2]
+    val body = if (style[3].toFloatOrNull() == LEGACY_BODY_SIZE) sizes[3] else style[3]
+    if (heading == style[2] && body == style[3]) return
+    edit().putString(PREF_SCREEN_STYLE, "${style[0]} ${style[1]} $heading $body").apply()
+}
+
+/** Whether a rendered page should be dark; "跟随 Mihon" falls back to the system. */
+fun isDark(pref: SharedPreferences, appDark: Boolean?, systemDark: Boolean) = when (pref.getString(PREF_DARK_MODE, DARK_APP)) {
+    DARK_ALWAYS -> true
+    DARK_NEVER -> false
+    else -> appDark ?: systemDark
+}
 
 fun preferencesInternal(context: Context, pref: SharedPreferences, isLoggedIn: Boolean) = arrayOf(
     ListPreference(context).apply {
@@ -58,11 +98,11 @@ fun preferencesInternal(context: Context, pref: SharedPreferences, isLoggedIn: B
     EditTextPreference(context).apply {
         key = PREF_SCREEN_STYLE
         title = "阅读页样式设置"
-        summary = pref.getString(key, "#FAFAF8 #000000 52 30")!!.split(' ').let {
+        summary = pref.getString(key, DEFAULT_SCREEN_STYLE)!!.split(' ').let {
             "背景色：${it[0]}   |   文本色：${it[1]}\n标题字号：${it[2]}   |   正文字号：${it[3]}"
         }
-        dialogMessage = "每项配置用单空格隔开：前两个是颜色样式，格式为十六进制颜色代码，分别配置背景色和文本色；后两个是字号设置，格式为正数，分别配置标题和正文字号\n默认值：#FAFAF8 #000000 52 30"
-        setDefaultValue("#FAFAF8 #000000 52 30")
+        dialogMessage = "每项配置用单空格隔开：前两个是颜色样式，格式为十六进制颜色代码，分别配置背景色和文本色；后两个是字号设置，格式为正数，分别配置标题和正文字号\n默认值：$DEFAULT_SCREEN_STYLE"
+        setDefaultValue(DEFAULT_SCREEN_STYLE)
         setOnPreferenceChangeListener { _, newValue ->
             if (STYLE_REGEX.matches(newValue as String)) {
                 summary = newValue.split(' ').let { "背景色：${it[0]}   |   文本色：${it[1]}\n标题字号：${it[2]}   |   正文字号：${it[3]}" }
@@ -102,11 +142,13 @@ fun preferencesInternal(context: Context, pref: SharedPreferences, isLoggedIn: B
         entryValues = arrayOf("A", "B", "C")
         setDefaultValue(DEFAULT_SET)
     },
-    SwitchPreferenceCompat(context).apply {
+    ListPreference(context).apply {
         key = PREF_DARK_MODE
         title = "深色模式"
-        summary = "阅读页面的样式将强制使用黑底白字"
-        setDefaultValue(false)
+        summary = "%s"
+        entries = arrayOf("跟随 Mihon", "始终开启", "始终关闭")
+        entryValues = arrayOf(DARK_APP, DARK_ALWAYS, DARK_NEVER)
+        setDefaultValue(DARK_APP)
         setOnPreferenceChangeListener { _, _ ->
             Toast.makeText(context, "已加载章节需清除章节缓存后生效", Toast.LENGTH_LONG).show()
             true

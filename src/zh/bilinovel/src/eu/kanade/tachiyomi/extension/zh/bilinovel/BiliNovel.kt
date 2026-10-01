@@ -37,7 +37,7 @@ import org.jsoup.select.Elements
 import java.text.SimpleDateFormat
 import java.util.Locale
 import java.util.TimeZone
-import kotlin.math.floor
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.time.Duration.Companion.seconds
 
 @Source
@@ -46,7 +46,9 @@ abstract class BiliNovel :
     ConfigurableSource {
     override val supportsLatest = true
 
-    private val pref by getPreferencesLazy()
+    // The settings of an earlier version are carried over as soon as the source is built, so a
+    // reader that never opens this source's preferences still gets the migrated defaults.
+    private val pref by getPreferencesLazy { migratePreferences() }
 
     override fun setupPreferenceScreen(screen: PreferenceScreen) {
         val isLoggedIn = client.cookieJar.loadForRequest(baseUrl.toHttpUrl()).any { it.name == "jieqiUserInfo" }
@@ -68,6 +70,12 @@ abstract class BiliNovel :
     }.addInterceptor(textInterceptor).addNetworkInterceptor(ChapterInterceptor()).build()
 
     // Customize
+
+    /** The image URL of every page the reader has opened, so it is rendered only once. */
+    private val pageImages = ConcurrentHashMap<String, String>()
+
+    /** The chapter log version the reading order seed was read from, kept for the session. */
+    private var salt: Pair<Int, Int>? = null
 
     private suspend fun ensureSearchTicket() {
         val names = client.cookieJar.loadForRequest(baseUrl.toHttpUrl()).map { it.name }
@@ -100,6 +108,9 @@ abstract class BiliNovel :
         val EXPRESSION_REGEX = Regex("Number.*?;")
         val SALT_REGEX = Regex("(?<![a-zA-Z0-9_])-?0x[0-9a-fA-F]+(?:[+*\\-]-?0x[0-9a-fA-F]+)+")
         val CHAPTERLOG_REGEX = Regex("/themes/zhmb/js/chapterlog\\.js\\?v[^\"]+")
+
+        /** Used when the chapter carries no script of its own, which happens on short chapters. */
+        val DEFAULT_SALT = 0 to 0
         val NEWLINE_REGEX = Regex("(?:\n\r\n)+")
         val DATE_FORMAT = SimpleDateFormat("yyyy-MM-dd", Locale.ENGLISH).apply {
             timeZone = TimeZone.getTimeZone("UTC+8")
@@ -325,7 +336,6 @@ abstract class BiliNovel :
         )
     }
 
-    private var salt: Pair<Int, Int>? = null
     private val SManga.id get() = NOVEL_ID_REGEX.find(url)!!.groups[1]!!.value
     private val Page.ids get() = CHAPTER_IDS_REGEX.find(url)!!.groups.drop(1).map { it?.value }
     private fun String.toHalfWidthDigits() = this.map { if (it in '０'..'９') it - 65248 else it }.joinToString("")
@@ -375,24 +385,6 @@ abstract class BiliNovel :
             }
         }
         return desc.toString()
-    }
-
-    private suspend fun parseSalt(path: String) {
-        var s1 = 0
-        var s2 = 0
-        val body = client.get(baseUrl + path, headers).body.string()
-        EXPRESSION_REGEX.findAll(body).forEach { m ->
-            SALT_REGEX.findAll(m.value).takeIf { it.count() == 2 }
-                ?.map { calculate(it.value) }
-                ?.let { salt ->
-                    salt.first().takeIf { it > 100 }?.let { s1 = it }
-                    salt.last().takeIf { it > 200 }?.let { s2 = it }
-                }
-        }
-        salt = Pair(s1, s2).apply {
-            val version = path.substringAfter("?")
-            Log.v("BiliNovel", "chapterlog: $version, salt1: $first, salt2: $second")
-        }
     }
 
     private fun calculate(expression: String): Int {
@@ -466,62 +458,86 @@ abstract class BiliNovel :
         else -> "${els[i + 1].attr("href")}#prev"
     }
 
-    private fun sort(content: Element, chapterId: Int): String {
-        // 1. 计算种子
-        val seed = chapterId * salt!!.first + salt!!.second
+    // Manga View Page
 
-        // 2. 获取所有子节点（包括文本节点等）
-        val childNodes = content.children().toMutableList().also {
-            it.removeIf { e ->
-                e.tagName() != "img" && (e.tagName() != "p" || e.text().trim().isBlank())
+    override suspend fun getPageList(chapter: SChapter): List<Page> {
+        // One request tells us how many pages the site serves the chapter in. Each page keeps its
+        // own url and is rendered on its own when the reader reaches it, by getImageUrl below.
+        val urls = sourcePages(chapter.url)
+        return urls.mapIndexed { index, url -> Page(index, url) }
+    }
+
+    /**
+     * The chapter's pages, as absolute urls. Only a later page carries the counter of the whole
+     * chapter in its title, so the second one is what tells us how many there are.
+     */
+    private suspend fun sourcePages(url: String): List<String> {
+        val first = url.let { if (it.contains("#")) it else it.replace(".", "_2.") }
+        val doc = client.get(baseUrl + first, headers).asJsoup()
+        val size = PAGE_SIZE_REGEX.find(doc.selectText("#atitle")!!)?.groups?.get(1)?.value?.toInt() ?: 1
+        val prefix = doc.location().substringBeforeLast("_")
+        return List(size.coerceAtLeast(1)) { i -> prefix + "${if (i > 0) "_${i + 1}" else ""}.html" }
+    }
+
+    /** The reading order seed the site hides in its chapter script. */
+    private suspend fun ensureSalt(doc: Document): Pair<Int, Int> {
+        salt?.let { return it }
+        val path = CHAPTERLOG_REGEX.find(doc.body().toString())?.value ?: return DEFAULT_SALT
+        var first = 0
+        var second = 0
+        EXPRESSION_REGEX.findAll(client.get(baseUrl + path, headers).body.string()).forEach { match ->
+            val expressions = SALT_REGEX.findAll(match.value)
+            if (expressions.count() != 2) return@forEach
+            val values = expressions.map { calculate(it.value) }
+            values.first().takeIf { it > 100 }?.let { first = it }
+            values.last().takeIf { it > 200 }?.let { second = it }
+        }
+        return Pair(first, second).also {
+            Log.v("BiliNovel", "chapterlog: ${path.substringAfter("?")}, salt1: $first, salt2: $second")
+            salt = it
+        }
+    }
+
+    // Image
+
+    override suspend fun getImageUrl(page: Page): String {
+        val ids = page.ids
+        val key = "${ids[0]}-${ids[1]}-${page.index}"
+        if (!page.url.contains('_')) { // 只在第一页，请求书签API
+            if (pref.getBoolean(PREF_LOAD_ALL_IMAGES, false)) {
+                // Drop what this chapter rendered, so a retry reads and draws every illustration again.
+                textInterceptor.clean("${ids[0]}-${ids[1]}")
+                pageImages.keys.removeIf { it.startsWith("${ids[0]}-${ids[1]}-") }
             }
-            it.forEachIndexed { i, e ->
-                if (e.tagName() == "img" && e.hasAttr("data-src")) {
-                    it[i] = e.attr("src", e.attr("data-src"))
+            if (pref.getBoolean(PREF_AUTO_BOOKMARK, false)) {
+                val apiUrl = BOOKMARK_URL.format(baseUrl, ids[0], ids[1])
+                CoroutineScope(currentCoroutineContext()).launch(Dispatchers.IO) {
+                    try {
+                        val response = client.get(apiUrl, headers)
+                        if (response.body.string().startsWith("对不起")) {
+                            pref.edit().putBoolean(PREF_AUTO_BOOKMARK, false).apply()
+                        }
+                    } catch (e: Exception) {
+                        pref.edit().putBoolean(PREF_AUTO_BOOKMARK, false).apply()
+                        Log.e("BiliNovel", e.message ?: e.javaClass.name)
+                    }
                 }
             }
         }
+        // The site's own pagination is kept: every page of the chapter is rendered by itself. A
+        // page the cache has since dropped is rendered again instead of failing to be served.
+        return pageImages[key]?.takeIf(textInterceptor::holds)
+            ?: render(page, ids, key).also { pageImages[key] = it }
+    }
 
-        // 3. 过滤出有效的<p>元素节点
-        val paragraphs = childNodes.filter { it.tagName() == "p" }.toMutableList()
-
-        // 5. 创建排列数组
-        val n = paragraphs.size
-        val permutation = mutableListOf<Int>().apply {
-            // 前20个保持原顺序
-            addAll(0 until minOf(20, n))
-            // 处理超过20的部分
-            if (n > 20) {
-                val after20 = (20 until n).toMutableList()
-                var num = seed.toLong()
-                for (i in after20.size - 1 downTo 1) {
-                    num = (num * 9302L + 49397L) % 233280L
-                    val j = floor((num / 233280.0) * (i + 1)).toInt()
-                    after20[j] = after20[i].also { after20[i] = after20[j] }
-                }
-                addAll(after20)
-            }
-        }
-
-        // 6. 创建重排序后的段落数组
-        val shuffled = arrayOfNulls<Element>(n).apply {
-            for (i in 0 until n) {
-                this[permutation[i]] = paragraphs[i].apply {
-                    text("\u00A0\u00A0\u00A0\u00A0" + text())
-                }
-            }
-        }
-
-        // 7. 替换原始节点中的<p>元素
-        var paraIndex = 0
-        childNodes.forEachIndexed { i, e ->
-            if (e.tagName() == "p") {
-                childNodes[i] = shuffled[paraIndex++]!!
-            }
-        }
-
-        // 8. 清空并重新添加处理后的节点
-        return childNodes.joinToString(separator = "") { it.outerHtml() }
+    /** Reads one site page into an image, with the title and illustrations it carries. */
+    private suspend fun render(page: Page, ids: List<String?>, key: String): String {
+        val doc = client.get(page.url, headers).asJsoup()
+        doc.selectFirst("#acontent > .center-note")?.run { throw Exception(text()) }
+        val content = doc.selectFirst("#acontent") ?: throw Exception("页面已失效，请刷新本章节")
+        val switch = pref.getBoolean(PREF_DISPLAY_TRADITIONAL, false)
+        val text = collectBlocks(content, ids[1]!!.toInt(), ensureSalt(doc)).text
+        return textInterceptor.pageUrl("$key|${page.url}", chapterTitle(doc).convert(switch), text.convert(switch))
     }
 
     private fun mangaPageParse(response: Response) = response.asJsoup().let { doc ->
@@ -635,63 +651,5 @@ abstract class BiliNovel :
         }
 
         SMangaUpdate(asyncManga.await(), asyncChapters.await())
-    }
-
-    // Manga View Page
-
-    override suspend fun getPageList(chapter: SChapter): List<Page> {
-        val response = client.get(
-            baseUrl + chapter.url.let {
-                if (it.contains("#")) it else it.replace(".", "_2.")
-            },
-            headers,
-        )
-        return response.asJsoup().let { doc ->
-            doc.selectFirst("#acontent > .center-note")?.run { throw Exception(text()) }
-            val size = PAGE_SIZE_REGEX.find(doc.selectText("#atitle")!!)!!.groups[1]!!.value
-            val prefix = doc.location().substringBeforeLast("_")
-            List(size.toInt().takeUnless { it == 0 } ?: 1) { i ->
-                Page(i, prefix + "${if (i > 0) "_${i + 1}" else ""}.html")
-            }
-        }
-    }
-
-    // Image
-
-    override suspend fun getImageUrl(page: Page): String {
-        val ids = page.ids
-        if (!page.url.contains('_')) { // 只在第一页，请求书签API
-            if (pref.getBoolean(PREF_LOAD_ALL_IMAGES, false)) {
-                textInterceptor.clean(ids[1]!!)
-            }
-            if (pref.getBoolean(PREF_AUTO_BOOKMARK, false)) {
-                val apiUrl = BOOKMARK_URL.format(baseUrl, ids[0], ids[1])
-                CoroutineScope(currentCoroutineContext()).launch(Dispatchers.IO) {
-                    try {
-                        val response = client.get(apiUrl, headers)
-                        if (response.body.string().startsWith("对不起")) {
-                            pref.edit().putBoolean(PREF_AUTO_BOOKMARK, false).apply()
-                        }
-                    } catch (e: Exception) {
-                        pref.edit().putBoolean(PREF_AUTO_BOOKMARK, false).apply()
-                        Log.e("BiliNovel", e.message ?: e.javaClass.name)
-                    }
-                }
-            }
-        }
-        return imageUrlParse(client.get(page.url, headers), "${ids[1]}-${ids[2] ?: "1"}")
-    }
-
-    private suspend fun imageUrlParse(resp: Response, key: String) = resp.asJsoup().let { doc ->
-        if (salt == null) parseSalt(CHAPTERLOG_REGEX.find(doc.body().toString())!!.value)
-        val switch = pref.getBoolean(PREF_DISPLAY_TRADITIONAL, false)
-        val title = doc.selectFirst("#atitle")?.html()?.takeIf { it.indexOf("/") < 0 } ?: ""
-        val content = doc.selectFirst("#acontent")!!
-        val chapterId = CHAPTER_IDS_REGEX.find(doc.location())!!.groups[2]!!.value.toInt()
-        TextInterceptor.createUrl(
-            key,
-            title.convert(switch),
-            sort(content, chapterId).convert(switch),
-        )
     }
 }
