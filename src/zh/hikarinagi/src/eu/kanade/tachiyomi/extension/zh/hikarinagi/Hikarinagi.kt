@@ -58,7 +58,7 @@ abstract class Hikarinagi :
     override val client = super.client.newBuilder()
         .addInterceptor(NovelTextInterceptor(preferences))
         .addInterceptor(NovelImageInterceptor())
-        .addInterceptor(MangaImageInterceptor())
+        .addInterceptor(ImageInterceptor())
         .build()
 
     companion object {
@@ -67,7 +67,7 @@ abstract class Hikarinagi :
         /** Must match the light novel source's name in `build.gradle.kts`. */
         const val NOVEL_SOURCE_NAME = "Hikarinagi Novels"
 
-        /** Also read by [MangaImageInterceptor], which reports the same login problem. */
+        /** Also read by [ImageInterceptor], which reports the same login problem. */
         internal const val LOGIN_MESSAGE = "请先在 WebView 中登录"
 
         private const val UNAVAILABLE_MESSAGE = "未收录本卷内容，暂无在线阅读"
@@ -175,8 +175,6 @@ abstract class Hikarinagi :
             response.close()
             if (response.code == 401) throw Exception(LOGIN_MESSAGE) else throw HttpException(response.code)
         }
-        // A page only carries its id: its content URL is built here, so it follows baseUrl, and
-        // imageRequest below turns it into the POST the site wants, see MangaImageInterceptor.
         response.parseAs<JsonObject>().getObject("manifest").getArray("pages").mapIndexed { index, page ->
             with(page.obj) {
                 val pid = getString("id")
@@ -186,10 +184,6 @@ abstract class Hikarinagi :
         }
     }
 
-    /**
-     * The page request: the site wants a POST keyed by a token of our own, which the fragment carries
-     * back to [MangaImageInterceptor]. Novel pages keep the plain GET their own interceptors serve.
-     */
     override fun imageRequest(page: Page): Request = if (isNovelMode) {
         super.imageRequest(page)
     } else {

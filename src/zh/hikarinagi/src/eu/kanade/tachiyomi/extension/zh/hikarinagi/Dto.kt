@@ -59,7 +59,6 @@ class MangaItem(
 @Serializable
 class ChapterItem(
     val id: Int,
-    // A chapter can be served without a name; the site itself shows no title for it either.
     val name: String?,
     @SerialName("page_count") val size: Int,
 ) {

@@ -16,7 +16,7 @@ import javax.crypto.spec.SecretKeySpec
  * A request carries a 64 byte token the client generated itself (or, for volumes, one the session
  * returned), and the answer is `iv || AES-256-GCM(ciphertext)`: the key is the token's two halves
  * XORed together, and the token (for pages the ids it stands for) is the additional authenticated
- * data. See `MangaImageInterceptor` and `Hikarinagi.getNovelPageList`.
+ * data. See `ImageInterceptor` and `Hikarinagi.getNovelPageList`.
  */
 internal object ReaderCrypto {
 
