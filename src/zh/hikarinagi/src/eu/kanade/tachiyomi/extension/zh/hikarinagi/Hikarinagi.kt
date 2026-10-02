@@ -1,6 +1,8 @@
 package eu.kanade.tachiyomi.extension.zh.hikarinagi
 
 import androidx.preference.PreferenceScreen
+import eu.kanade.tachiyomi.network.HttpException
+import eu.kanade.tachiyomi.network.POST
 import eu.kanade.tachiyomi.source.ConfigurableSource
 import eu.kanade.tachiyomi.source.model.Filter
 import eu.kanade.tachiyomi.source.model.FilterList
@@ -20,7 +22,6 @@ import keiyoushi.utils.getLong
 import keiyoushi.utils.getObject
 import keiyoushi.utils.getPreferencesLazy
 import keiyoushi.utils.getString
-import keiyoushi.utils.getStringOrNull
 import keiyoushi.utils.obj
 import keiyoushi.utils.parseAs
 import keiyoushi.utils.toJsonRequestBody
@@ -29,6 +30,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.Request
 import okhttp3.Response
 
 @Source
@@ -56,7 +58,7 @@ abstract class Hikarinagi :
     override val client = super.client.newBuilder()
         .addInterceptor(NovelTextInterceptor(preferences))
         .addInterceptor(NovelImageInterceptor())
-        .addInterceptor(MangaImageInterceptor(baseUrl, headers))
+        .addInterceptor(MangaImageInterceptor())
         .build()
 
     companion object {
@@ -170,16 +172,29 @@ abstract class Hikarinagi :
         val cid = chapter.memo.getString("cid")
         val response = client.get("$baseUrl/api/pages/mangas/reader/$cid/${chapter.url}", ensureSuccess = false)
         if (!response.isSuccessful) {
-            val code = response.code
             response.close()
-            throw Exception(if (code == 401) LOGIN_MESSAGE else "获取章节失败（HTTP $code）")
+            if (response.code == 401) throw Exception(LOGIN_MESSAGE) else throw HttpException(response.code)
         }
-        // A page only carries its id; the image itself comes from an encrypted POST, see MangaImageInterceptor.
+        // A page only carries its id: its content URL is built here, so it follows baseUrl, and
+        // imageRequest below turns it into the POST the site wants, see MangaImageInterceptor.
         response.parseAs<JsonObject>().getObject("manifest").getArray("pages").mapIndexed { index, page ->
             with(page.obj) {
-                Page(index, imageUrl = MangaImageInterceptor.createUrl(cid, chapter.url, getInt("id").toString(), getStringOrNull("mime_type")))
+                val pid = getString("id")
+                val mimeType = getString("mime_type")
+                Page(index, imageUrl = "$baseUrl/api/v3/reader/mangas/$cid/chapters/${chapter.url}/pages/$pid/content#$mimeType")
             }
         }
+    }
+
+    /**
+     * The page request: the site wants a POST keyed by a token of our own, which the fragment carries
+     * back to [MangaImageInterceptor]. Novel pages keep the plain GET their own interceptors serve.
+     */
+    override fun imageRequest(page: Page): Request = if (isNovelMode) {
+        super.imageRequest(page)
+    } else {
+        val token = ReaderCrypto.newToken()
+        POST("${page.imageUrl!!}|$token", headers, buildJsonObject { put("p", token) }.toJsonRequestBody<JsonObject>())
     }
 
     /** The volume's EPUB sits behind a short lived reader session that needs the login session. */

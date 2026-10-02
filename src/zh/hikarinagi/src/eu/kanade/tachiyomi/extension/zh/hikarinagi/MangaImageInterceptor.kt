@@ -1,54 +1,43 @@
 package eu.kanade.tachiyomi.extension.zh.hikarinagi
 
-import keiyoushi.utils.toJsonRequestBody
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.put
-import okhttp3.Headers
 import okhttp3.Interceptor
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Response
-import okhttp3.ResponseBody.Companion.toResponseBody
+import okhttp3.ResponseBody.Companion.asResponseBody
+import okio.buffer
 import java.io.IOException
 
-/** Serves a manga page: the site only hands them out through an encrypted POST. */
-class MangaImageInterceptor(
-    private val baseUrl: String,
-    private val headers: Headers,
-) : Interceptor {
+/**
+ * Serves a manga page. The site no longer hands out image URLs: it wants a POST whose body carries
+ * a token the client generated itself, and it answers with `iv || AES-256-GCM(ciphertext)` keyed by
+ * that token.
+ *
+ * The request is built by `Hikarinagi.imageRequest`, so this only has to decrypt what comes back.
+ * The token it needs for that rides in the request fragment, where the site never sees it.
+ */
+class MangaImageInterceptor : Interceptor {
 
     override fun intercept(chain: Interceptor.Chain): Response {
         val request = chain.request()
-        val url = request.url
-        if (url.host != HOST) return chain.proceed(request)
+        // Only the reader's pages carry a fragment, and it is `<type>|<token>`.
+        val fragment = request.url.fragment ?: return chain.proceed(request)
+        val mime = fragment.substringBefore('|')
+        val token = fragment.substringAfter('|')
+        // .../api/v3/reader/mangas/<mid>/chapters/<cid>/pages/<pid>/content
+        val (mid, _, cid, _, pid) = request.url.pathSegments.drop(4)
 
-        val mangaId = url.pathSegments.getOrNull(0) ?: throw IOException(BROKEN_URL)
-        val chapterId = url.pathSegments.getOrNull(1) ?: throw IOException(BROKEN_URL)
-        val pageId = url.pathSegments.getOrNull(2) ?: throw IOException(BROKEN_URL)
-
-        val token = ReaderCrypto.newToken()
-        val contentRequest = request.newBuilder()
-            .url("$baseUrl/api/v3/reader/mangas/$mangaId/chapters/$chapterId/pages/$pageId/content")
-            .headers(headers)
-            .post(buildJsonObject { put("p", token) }.toJsonRequestBody())
-            .build()
-
-        val response = chain.proceed(contentRequest)
+        val response = chain.proceed(request)
         if (!response.isSuccessful) {
             val code = response.code
             response.close()
             throw IOException(if (code == 401) Hikarinagi.LOGIN_MESSAGE else "加载图片失败（HTTP $code）")
         }
 
-        val page = response.use { ReaderCrypto.decrypt(token, it.body.bytes(), "manga:page:$mangaId:$chapterId:$pageId") }
-        return Response.Builder().request(request).ok(page.toResponseBody((url.queryParameter("mime") ?: "image/jpeg").toMediaType()))
-    }
+        // The answer is decrypted while the reader reads it, so a page is never held whole in memory.
+        val length = response.body.contentLength().takeIf { it > 0 }?.minus(ReaderCrypto.OVERHEAD_SIZE) ?: -1L
+        val page = ReaderCrypto.decrypting(response.body.source(), token, "manga:page:$mid:$cid:$pid")
+            .buffer().asResponseBody(mime.toMediaType(), length)
 
-    companion object {
-        private const val HOST = "hikarinagi-manga-image"
-
-        private const val BROKEN_URL = "图片地址无效"
-
-        /** Where the reader loads a page from; [mimeType] only labels the decrypted bytes. */
-        fun createUrl(mangaId: String, chapterId: String, pageId: String, mimeType: String?): String = "http://$HOST/$mangaId/$chapterId/$pageId" + (mimeType?.let { "?mime=$it" } ?: "")
+        return Response.Builder().request(request).ok(page)
     }
 }
