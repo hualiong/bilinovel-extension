@@ -11,12 +11,12 @@ import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
 /**
- * The site's reader hands out every page and every volume encrypted.
+ * The site's manga reader hands out every page encrypted.
  *
- * A request carries a 64 byte token the client generated itself (or, for volumes, one the session
- * returned), and the answer is `iv || AES-256-GCM(ciphertext)`: the key is the token's two halves
- * XORed together, and the token (for pages the ids it stands for) is the additional authenticated
- * data. See `ImageInterceptor` and `Hikarinagi.getNovelPageList`.
+ * A request carries a 64 byte token the client generated itself, and the answer is
+ * `iv || AES-256-GCM(ciphertext)`: the key is the token's two halves XORed together, and the ids
+ * the token stands for are the additional authenticated data. See `ImageInterceptor`; volumes use
+ * a different scheme entirely, [ReaderPublication].
  */
 internal object ReaderCrypto {
 
@@ -36,24 +36,13 @@ internal object ReaderCrypto {
         .also(random::nextBytes)
         .let { Base64.encodeToString(it, Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP) }
 
-    /**
-     * Decrypts an answer as it is read: the iv comes off the head of [source] and the rest goes
+    /** Decrypts an answer as it is read: the iv comes off the head of [source] and the rest goes
      * through the cipher, so a page is never held whole in memory. With GCM the tag can only be
      * checked once the stream ends.
      */
     fun decrypting(source: BufferedSource, token: String, associatedData: String): Source = runCatching {
         source.cipherSource(newCipher(token, source.readByteArray(IV_SIZE.toLong()), associatedData))
     }.getOrElse { throw IOException(DECRYPT_FAILED) }
-
-    /** Decrypts a whole answer, for callers that parse the bytes instead of streaming them. */
-    fun decrypt(token: String, content: ByteArray, associatedData: String): ByteArray {
-        if (content.size <= IV_SIZE) throw IOException(DECRYPT_FAILED)
-
-        return runCatching {
-            newCipher(token, content.copyOf(IV_SIZE), associatedData)
-                .doFinal(content, IV_SIZE, content.size - IV_SIZE)
-        }.getOrElse { throw IOException(DECRYPT_FAILED) }
-    }
 
     /** The cipher an answer is read through, with its iv already taken off the head. */
     private fun newCipher(token: String, iv: ByteArray, associatedData: String): Cipher {

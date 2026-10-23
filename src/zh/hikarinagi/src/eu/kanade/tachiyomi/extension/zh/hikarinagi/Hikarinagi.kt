@@ -70,9 +70,10 @@ abstract class Hikarinagi :
         /** Also read by [ImageInterceptor], which reports the same login problem. */
         internal const val LOGIN_MESSAGE = "请先在 WebView 中登录"
 
-        private const val UNAVAILABLE_MESSAGE = "未收录本卷内容，暂无在线阅读"
+        private const val UNAVAILABLE_MESSAGE = "未收录该内容，暂无在线阅读"
 
-        private const val BROKEN_VOLUME_MESSAGE = "本卷文件损坏，暂时无法阅读"
+        /** Also read by [ReaderPublication] when a piece fails to authenticate or parse. */
+        internal const val BROKEN_VOLUME_MESSAGE = "本卷文件损坏，暂时无法阅读"
     }
 
     private fun String?.ifNotBlank(action: (String) -> Unit) = this?.takeIf(String::isNotBlank)?.let(action)
@@ -169,6 +170,7 @@ abstract class Hikarinagi :
     override suspend fun getPageList(chapter: SChapter): List<Page> = if (isNovelMode) {
         getNovelPageList(chapter)
     } else {
+        if (chapter.memo.getBooleanOrNull("unavailable") == true) throw Exception(UNAVAILABLE_MESSAGE)
         val cid = chapter.memo.getString("cid")
         val response = client.get("$baseUrl/api/pages/mangas/reader/$cid/${chapter.url}", ensureSuccess = false)
         if (!response.isSuccessful) {
@@ -191,7 +193,7 @@ abstract class Hikarinagi :
         POST("${page.imageUrl!!}|$token", headers, buildJsonObject { put("p", token) }.toJsonRequestBody<JsonObject>())
     }
 
-    /** The volume's EPUB sits behind a short lived reader session that needs the login session. */
+    /** The volume's EPUB ships as an encrypted publication behind a short lived reader session that needs the login session. */
     private suspend fun getNovelPageList(chapter: SChapter): List<Page> {
         if (chapter.memo.getBooleanOrNull("unavailable") == true) throw Exception(UNAVAILABLE_MESSAGE)
 
@@ -210,11 +212,14 @@ abstract class Hikarinagi :
             )
         }
 
-        val data = session.parseAs<JsonObject>().getObject("data")
-        val id = data.getString("id")
-        val epub = client.get("$baseUrl/api/v3/reader/sessions/$id/content").use {
-            ReaderCrypto.decrypt(data.getString("p"), it.body.bytes(), id)
-        }
+        // The API wraps responses in {success,data}, unlike some of its own captures — accept both shapes,
+        // and turn any degradation (error body, missing publication) into the retryable message instead of
+        // letting an English parse exception reach the reader.
+        val sessionJson = runCatching { session.parseAs<JsonObject>() }.getOrNull()
+            ?: throw Exception("获取分卷失败，请刷新重试")
+        val publication = runCatching { (sessionJson["data"] ?: sessionJson).obj.getObject("publication") }.getOrNull()
+            ?: throw Exception(UNAVAILABLE_MESSAGE)
+        val epub = ReaderPublication.fetch(client, publication)
         return buildPages(readEpubChapters(epub.inputStream())).ifEmpty { throw Exception(BROKEN_VOLUME_MESSAGE) }
     }
 

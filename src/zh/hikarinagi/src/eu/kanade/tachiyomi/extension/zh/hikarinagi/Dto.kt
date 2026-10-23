@@ -59,15 +59,20 @@ class MangaItem(
 @Serializable
 class ChapterItem(
     val id: Int,
-    val name: String?,
-    @SerialName("page_count") val size: Int,
+    val title: String? = null,
+    @SerialName("chapter_number") val number: String? = null,
+    @SerialName("page_count") val size: Int? = null,
+    val readable: Boolean = true,
 ) {
     fun toSChapter(cid: String, timestamp: Long) = SChapter.create().apply {
         url = id.toString()
-        name = this@ChapterItem.name.orEmpty()
-        scanlator = "${size}P"
+        name = title?.takeIf(String::isNotBlank) ?: number?.let { "第${it}话" }.orEmpty()
+        scanlator = size?.let { "${it}P" }
         date_upload = timestamp
-        memo = buildJsonObject { put("cid", cid) }
+        memo = buildJsonObject {
+            put("cid", cid)
+            if (!readable) put("unavailable", true)
+        }
     }
 }
 
