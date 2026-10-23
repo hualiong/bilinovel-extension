@@ -19,10 +19,10 @@
   {
     "name": "Tachiyomi: Hikarinagi",
     "pkg": "eu.kanade.tachiyomi.extension.zh.hikarinagi",
-    "apk": "tachiyomi-zh.hikarinagi-v1.6.3.apk",
+    "apk": "tachiyomi-zh.hikarinagi-v1.6.4.apk",
     "lang": "zh",
-    "code": 106003,
-    "version": "1.6.3",
+    "code": 106004,
+    "version": "1.6.4",
     "nsfw": 1,
     "sources": [
       {
