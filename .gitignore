@@ -13,3 +13,6 @@ generated-src/
 .kotlin
 *.jks
 /keystore.properties
+
+# local debugging artifacts (captures, tokens)
+.tmp*/
