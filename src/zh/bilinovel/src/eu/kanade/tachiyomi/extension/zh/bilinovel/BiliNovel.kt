@@ -24,11 +24,9 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.supervisorScope
-import okhttp3.Cookie
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Response
 import org.jsoup.nodes.Document
@@ -77,32 +75,21 @@ abstract class BiliNovel :
     /** The chapter log version the reading order seed was read from, kept for the session. */
     private var salt: Pair<Int, Int>? = null
 
-    private suspend fun ensureSearchTicket() {
-        val names = client.cookieJar.loadForRequest(baseUrl.toHttpUrl()).map { it.name }
-        if (!names.contains("jieqiSearchCss") || !names.contains("jieqiSearchJs")) {
-            coroutineScope {
-                launch { client.get("$baseUrl/search.html?search_guard=css", headers).close() }
-                launch {
-                    COOKIE_REGEX.find(client.get("$baseUrl/search.html?search_guard=js", headers).body.string())
-                        ?.groupValues?.get(1)
-                        ?.let { cookie ->
-                            val url = baseUrl.toHttpUrl()
-                            Cookie.parse(url, cookie)?.let { client.cookieJar.saveFromResponse(url, listOf(it)) }
-                        }
-                }
-            }
-        }
-        client.get("$baseUrl/search.html?search_guard=redeem", headers).close()
-        val cookies = client.cookieJar.loadForRequest(baseUrl.toHttpUrl())
-        if (cookies.find { it.name == "jieqiSearchTicket" }?.value.isNullOrEmpty()) throw Exception("获取搜索凭证失败，请稍后再试")
-    }
+    /**
+     * The site now answers a keyword search with an image captcha until the reader verifies
+     * once, after which searches are admitted for 30 minutes. The old `search_guard` cookies
+     * are no longer issued.
+     *
+     * The captcha cannot be shown here, but the cookie it leaves behind lives in the same
+     * cookie jar the web view writes to, so a reader who verifies there can search normally.
+     */
+    private fun Response.hasCaptcha() = peekBody(16_384).string().let { it.contains("search_challenge") || it.contains("搜索验证") }
 
     companion object {
         const val BOOKMARK_URL = "%s/modules/article/addbookcase.php?bid=%s&cid=%s&pid=1&ajax_request=1"
         val DATE_REGEX = Regex("\\d{4}-\\d{1,2}-\\d{1,2}")
         val PAGE_REGEX = Regex("第(\\d+)/(\\d+)页")
         val NOVEL_ID_REGEX = Regex("/novel/(\\d+)\\.html")
-        val COOKIE_REGEX = Regex("cookie=\"(.*?)\";")
         val CHAPTER_IDS_REGEX = Regex("/novel/(\\d+)/(\\d+)(?:_(\\d+))?\\.html")
         val PAGE_SIZE_REGEX = Regex("（\\d+/(\\d+)）")
         val EXPRESSION_REGEX = Regex("Number.*?;")
@@ -604,7 +591,6 @@ abstract class BiliNovel :
         val request = NOVEL_ID_REGEX.find(query)?.value?.let { GET(baseUrl + it, headers) } ?: run {
             val url = baseUrl.toHttpUrl().newBuilder()
             if (query.isNotBlank()) {
-                ensureSearchTicket()
                 url.addPathSegment("search").addPathSegment("${query}_$page.html")
             } else {
                 url.addPathSegment("wenku")
@@ -616,6 +602,7 @@ abstract class BiliNovel :
         if (response.request.url.pathSegments.contains("novel")) {
             return MangasPage(listOf(response.parseManga()), false)
         }
+        if (query.isNotBlank() && response.hasCaptcha()) throw Exception("请先在 WebView 中点击输入框进行搜索，再手动通过验证")
         return mangaPageParse(response)
     }
 

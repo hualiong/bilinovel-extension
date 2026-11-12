@@ -6,7 +6,7 @@ plugins {
 
 keiyoushi {
     name = "BiliNovel"
-    versionCode = 26
+    versionCode = 27
     contentWarning = ContentWarning.SAFE
     libVersion = "1.6"
 
