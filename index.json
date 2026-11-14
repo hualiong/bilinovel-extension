@@ -25,10 +25,10 @@
   {
     "name": "Tachiyomi: Hikarinagi",
     "pkg": "eu.kanade.tachiyomi.extension.zh.hikarinagi",
-    "apk": "tachiyomi-zh.hikarinagi-v1.6.4.apk",
+    "apk": "tachiyomi-zh.hikarinagi-v1.6.5.apk",
     "lang": "zh",
-    "code": 106004,
-    "version": "1.6.4",
+    "code": 106005,
+    "version": "1.6.5",
     "nsfw": 1,
     "sources": [
       {
@@ -40,7 +40,7 @@
       {
         "id": "1148300780955902112",
         "lang": "zh",
-        "name": "Hikarinagi Novels",
+        "name": "Hikarinagi Novel",
         "baseUrl": "https://www.hikarinagi.org"
       }
     ]
