@@ -36,52 +36,80 @@ import java.util.concurrent.ConcurrentHashMap
  * out with [StaticLayout] and the illustrations are drawn into the same bitmap, scaled to the text
  * width so both margins stay clear.
  *
- * A chapter taller than [MAX_PAGE_HEIGHT] is kept as several segments, which the page list hands
- * out as its own pages while this interceptor serves the bitmaps.
+ * A chapter is split into pages of at most [MAX_PAGE_HEIGHT], which the page list hands out as its
+ * own pages while this interceptor draws each one on demand.
  */
 class TextInterceptor(
     private val client: OkHttpClient,
     private val headers: Headers,
     private val pref: SharedPreferences,
 ) : Interceptor {
+    /**
+     * The chapters laid out and ready to be drawn, oldest dropped first.
+     *
+     * Per source instance on purpose: the web reader's keys carry a -web- suffix
+     * ("article-chapter-web-page") and the client's do not, so the two never name the same
+     * render. Sharing these maps would one day let a renamed key collide across sources.
+     */
+    private val chapters = LinkedHashMap<String, Render>()
 
     override fun intercept(chain: Interceptor.Chain): Response {
         val request = chain.request()
         val url = request.url
-        if (url.host != HOST) return chain.proceed(request)
+        if (url.host != HOST) {
+            // An illustration page Mihon requested by its own URL: frame its response, and remember.
+            if (url.fragment != FRAME) return chain.proceed(request)
+            val plain = request.newBuilder().url(url.newBuilder().fragment(null).build()).build()
+            val frameName = "frame/${canvasStamp()}/${plain.url}"
+            pagesCache[frameName]?.let { return Response.Builder().request(request).ok(png(it)) }
+            val response = chain.proceed(plain)
+            if (!response.isSuccessful) return response
+            val framed = frame(response)
+            cache(frameName, framed)
+            return Response.Builder().request(request).ok(png(framed))
+        }
 
-        val key = url.pathSegments.firstOrNull().orEmpty()
-        val page = pagesCache[key] ?: throw IOException("页面已失效，请刷新本章节")
+        val key = url.pathSegments.getOrNull(0).orEmpty()
+        val index = url.pathSegments.getOrNull(1)?.toIntOrNull()
+            ?: throw IOException("页面已失效，请刷新本章节")
+        val render = synchronized(chapters) { chapters[key] }
+            ?: throw IOException("页面已失效，请刷新本章节")
+        // The render's stamp rides in the name, so a settings change never serves a stale bitmap.
+        val name = "$key/$index/${render.stamp}"
+        val page = pagesCache[name] ?: render.drawPage(index).also { cache(name, it) }
 
+        return Response.Builder().request(request).ok(png(page))
+    }
+
+    /** The canvas colours every drawn page and every framed illustration ride on. */
+    private fun canvasStamp() = "${isDark(pref, appDarkTheme(), systemDarkTheme())}/${pref.getString(PREF_SCREEN_STYLE, DEFAULT_SCREEN_STYLE)}"
+
+    private fun png(bitmap: Bitmap): okhttp3.ResponseBody {
         val data = ByteArrayOutputStream()
-        page.compress(Bitmap.CompressFormat.PNG, 100, data)
-
-        return Response.Builder()
-            .request(request)
-            .ok(data.toByteArray().toResponseBody(IMAGE_PNG))
+        bitmap.compress(Bitmap.CompressFormat.PNG, 100, data)
+        return data.toByteArray().toResponseBody(IMAGE_PNG)
     }
 
     /**
-     * Renders one of the chapter's pages and returns the URL it is served from.
-     *
-     * The site splits the chapter itself, so a page is only ever rendered when the reader asks
-     * for it, and it becomes one image however long it is; the image stays cached for when the
-     * reader asks for the page again.
+     * Lays the chapter out and returns one entry per page: null is drawn here when the reader
+     * asks for it; a URL is an illustration the reader requests itself, which this interceptor
+     * then frames. An unread page, and the illustration on it, costs nothing.
      */
-    fun pageUrl(key: String, title: String, text: String): String {
-        val bitmap = Render(key, title, text).draw()
-        // Both sides of the cache meet on this name: it is the path the reader asks for.
-        val name = "${title.hashCode()}-${text.hashCode()}-${System.nanoTime()}"
-        cache(name, bitmap)
-        return "http://$HOST/$name"
+    fun prepare(key: String, title: String, text: String, split: Boolean = true): List<String?> {
+        // Chapter images are only useful while their chapter is being read.
+        imageCache.keys.removeIf { it != key }
+        val render = Render(key, title, text, split)
+        synchronized(chapters) {
+            chapters[key] = render
+            while (chapters.size > MAX_CHAPTERS) {
+                chapters.remove(chapters.keys.first())
+            }
+        }
+        return render.entries
     }
 
-    /**
-     * Whether the page behind [url] is still held. A long chapter can push an earlier page out of
-     * the cache, and the reader keeps asking for the URL it was given, so the source has to know
-     * when that URL no longer answers.
-     */
-    fun holds(url: String) = pagesCache.containsKey(url.substringAfterLast('/'))
+    /** The URL the reader asks for; [prepare] must have run for [key] first. */
+    fun pageUrl(key: String, index: Int) = "http://$HOST/$key/$index"
 
     /**
      * Keeps the page images the reader is opening, dropping another one once the cache is full.
@@ -99,9 +127,13 @@ class TextInterceptor(
         }
     }
 
-    private inner class Render(private val key: String, private val title: String, private val text: String) {
+    private inner class Render(private val key: String, title: String, text: String, private val split: Boolean) {
         private val dark = isDark(pref, appDarkTheme(), systemDarkTheme())
         private val readStyle = pref.getString(PREF_SCREEN_STYLE, DEFAULT_SCREEN_STYLE)!!.split(' ')
+
+        /** Everything that can change pixels, so one stamp covers every stale-page path. */
+        val stamp = canvasStamp() +
+            "/${pref.getBoolean(PREF_DISPLAY_TRADITIONAL, false)}/${pref.getBoolean(PREF_LOAD_ALL_IMAGES, false)}"
 
         private val background = if (dark) Color.BLACK else Color.parseColor(readStyle[0])
         private val textColor = if (dark) Color.WHITE else Color.parseColor(readStyle[1])
@@ -154,61 +186,129 @@ class TextInterceptor(
          */
         private val pageBottomGap = (lineHeight + PARAGRAPH_GAP - (bodyPaint.descent() - bodyPaint.ascent())).toInt().coerceAtLeast(1)
 
-        private val parsed = parse(text)
-        private val images = loadImages(key, parsed)
-        private val blocks = parsed.map(::block)
+        /**
+         * The room between two paragraph panels. A paragraph panel already ends at its descent, so
+         * the baseline step of the old single-panel renderer shrinks by that much here.
+         */
+        private val paragraphGap = pageBottomGap
 
-        /** Draws the page as tall as its text and illustrations need it to be. */
-        fun draw(): Bitmap {
-            val heading = title.trim()
-                .takeIf(String::isNotEmpty)
-                ?.let { headingLayout(plainText(it)) }
-            return drawPage(heading)
+        /** The title, centred above the body and taken from the chapter's own markup. */
+        private val heading = title.trim()
+            .takeIf(String::isNotEmpty)
+            ?.let { headingLayout(plainText(it)) }
+        private val headingBlock = heading?.let { it.height + 2 * HEADING_GAP + DIVIDER_HEIGHT } ?: 0
+
+        private val parsed = parse(text)
+
+        // A client chapter hands every illustration to the reader as its own page; only the
+        // single drawn web page bakes illustrations into the text.
+        private val images = if (split) emptyMap() else loadImages(key, parsed)
+        private val panels = parsed.flatMap(::panels)
+
+        /** A web page is drawn as one image, however tall; a client chapter is split into pages. */
+        private val maxPageHeight = if (split) MAX_PAGE_HEIGHT else MAX_BITMAP_HEIGHT - 1
+
+        /** null: a page drawn from the body; non-null: an illustration URL the reader requests itself. */
+        val entries: List<String?>
+        private val pages: List<List<Panel>?>
+
+        init {
+            val (entries, pages) = paginate()
+            this.entries = entries
+            this.pages = pages
         }
 
-        private fun drawPage(heading: StaticLayout?): Bitmap {
-            // A chapter opens with room above its heading; a page the site continued starts at once.
-            val topMargin = if (heading != null) TOP_MARGIN else 0
-            val headingBlock = heading?.let { it.height + 2 * HEADING_GAP + DIVIDER_HEIGHT } ?: 0
+        val pageCount get() = entries.size
+
+        /** The blank between two panels: paragraphs keep a paragraph gap, illustrations a line. */
+        private fun gapBetween(previous: Panel, next: Panel): Int = if (previous is Panel.Paragraphs && next is Panel.Paragraphs) paragraphGap else lineGap
+
+        /**
+         * Splits the body into pages at paragraph boundaries, so one page is one screenful. A
+         * client chapter flushes the text before each illustration, which becomes the reader's
+         * own page and is only fetched when the reader reaches it.
+         */
+        private fun paginate(): Pair<List<String?>, List<List<Panel>?>> {
+            val entries = mutableListOf<String?>()
+            val pages = mutableListOf<List<Panel>?>()
+            var current = mutableListOf<Panel>()
+            var height = 0
+            // The first page also carries the chapter heading above the body.
+            var limit = maxPageHeight - (if (heading != null) TOP_MARGIN + headingBlock else 0)
+            fun flush() {
+                pages += current
+                entries += null
+                current = mutableListOf()
+                height = 0
+                limit = maxPageHeight
+            }
+            fun add(panel: Panel) {
+                if (current.isNotEmpty() && height + gapBetween(current.last(), panel) + panel.height > limit) flush()
+                if (current.isNotEmpty()) height += gapBetween(current.last(), panel)
+                current += panel
+                height += panel.height
+            }
+            if (split) {
+                parsed.forEach { block ->
+                    when (block) {
+                        is Block.Image -> {
+                            if (block.url.isBlank()) return@forEach
+                            if (current.isNotEmpty()) flush()
+                            pages += null
+                            entries += block.url
+                        }
+
+                        is Block.Text -> block.text.split('\n')
+                            .map(String::trim)
+                            .filter(String::isNotEmpty)
+                            .forEach { add(paragraphPanel(it)) }
+                    }
+                }
+            } else {
+                panels.forEach(::add)
+            }
+            if (current.isNotEmpty() || entries.isEmpty()) flush()
+            return entries to pages
+        }
+
+        /** Draws one page as tall as its text and illustrations need it to be. */
+        fun drawPage(index: Int): Bitmap {
+            val page = pages.getOrNull(index) ?: throw IOException("页面已失效，请刷新本章节")
+            // A chapter opens with room above its heading; a continued page starts at once.
+            val first = index == 0
+            val topMargin = if (first && heading != null) TOP_MARGIN else 0
+            val header = if (first) headingBlock else 0
+            val bodyHeight = page.mapIndexed { i, panel ->
+                panel.height + if (i == 0) 0 else gapBetween(page[i - 1], panel)
+            }.sum()
 
             // Whatever the page holds, it is one image; the reader scrolls it like any other page.
-            val height = (topMargin + headingBlock + bodyHeight() + pageBottomGap).coerceAtLeast(1)
+            val height = (topMargin + header + bodyHeight + pageBottomGap).coerceAtLeast(1)
             if (height > MAX_BITMAP_HEIGHT) throw IOException("本章页面过长，无法生成图片（$height px）")
             val bitmap = Bitmap.createBitmap(WIDTH, height, Bitmap.Config.ARGB_8888)
             val canvas = Canvas(bitmap)
             canvas.drawColor(background)
 
-            heading?.let {
-                it.draw(canvas, X_PADDING, topMargin.toFloat())
-                val dividerY = (topMargin + it.height + HEADING_GAP).toFloat()
-                canvas.drawRect(X_PADDING, dividerY, WIDTH - X_PADDING, dividerY + DIVIDER_HEIGHT, dividerPaint)
+            if (first) {
+                heading?.let {
+                    it.draw(canvas, X_PADDING, topMargin.toFloat())
+                    val dividerY = (topMargin + it.height + HEADING_GAP).toFloat()
+                    canvas.drawRect(X_PADDING, dividerY, WIDTH - X_PADDING, dividerY + DIVIDER_HEIGHT, dividerPaint)
+                }
             }
 
-            var top = (topMargin + headingBlock).toFloat()
-            blocks.forEachIndexed { index, panel ->
-                if (index > 0) top += lineGap
+            var top = (topMargin + header).toFloat()
+            page.forEachIndexed { i, panel ->
+                if (i > 0) top += gapBetween(page[i - 1], panel)
                 draw(canvas, panel, top)
                 top += panel.height
             }
             return bitmap
         }
 
-        /** The room the body takes, its paragraphs and illustrations told apart. */
-        private fun bodyHeight(): Int = blocks.sumOf { it.height } +
-            if (blocks.isEmpty()) 0 else (blocks.size - 1) * lineGap
-
         private fun draw(canvas: Canvas, panel: Panel, top: Float) {
             when (panel) {
-                is Panel.Paragraphs -> {
-                    // Every paragraph takes a line and the blank line below it, so a paragraph of a
-                    // single line still moves the next one down a whole line instead of onto itself.
-                    var baseline = top + panel.firstBaseline
-                    panel.layouts.forEachIndexed { index, layout ->
-                        if (index > 0) baseline += lineHeight + PARAGRAPH_GAP
-                        drawWrapped(canvas, layout, baseline)
-                        baseline += baselineSpan(layout)
-                    }
-                }
+                is Panel.Paragraphs -> drawWrapped(canvas, panel.layout, top + panel.firstBaseline)
 
                 is Panel.Figure -> {
                     val bitmap = images[panel.url]
@@ -240,12 +340,15 @@ class TextInterceptor(
                 val baseline = firstBaseline + (layout.getLineBaseline(line) - first)
                 val mark = text.takeIf { it.length > 1 }?.last()?.takeIf { it in HANGING_MARKS }
                 val body = if (mark == null) text else text.dropLast(1)
-
-                // Place a trailing mark by its ink, so it does not leave half a character of paper behind.
-                val ink = Rect()
-                bodyPaint.getTextBounds(text, text.length - 1, text.length, ink)
-                val markX = X_PADDING + CONTENT_WIDTH - ink.right
-                val width = if (mark == null) CONTENT_WIDTH else (markX - X_PADDING).toInt()
+                var width = CONTENT_WIDTH
+                var markX = 0f
+                if (mark != null) {
+                    // Place a trailing mark by its ink, so it does not leave half a character of paper behind.
+                    val ink = Rect()
+                    bodyPaint.getTextBounds(text, text.length - 1, text.length, ink)
+                    markX = X_PADDING + CONTENT_WIDTH - ink.right
+                    width = (markX - X_PADDING).toInt()
+                }
 
                 if (line == last || width <= 0 || !justify(canvas, body, baseline, width)) {
                     canvas.drawText(text, X_PADDING, baseline, bodyPaint)
@@ -269,28 +372,23 @@ class TextInterceptor(
             return true
         }
 
-        /** Turns a parsed block into the laid out paragraphs or the scaled illustration. */
-        private fun block(source: Block): Panel = when (source) {
-            is Block.Text -> {
-                val layouts = source.text.split('\n')
-                    .map(String::trim)
-                    .filter(String::isNotEmpty)
-                    .map(::bodyLayout)
-                val firstBaseline = -bodyPaint.ascent()
-                // The panel ends where its last line ends, so an illustration keeps one paragraph
-                // gap on either side instead of the room a paragraph would have taken below it.
-                var lastBaseline = firstBaseline
-                layouts.forEachIndexed { index, layout ->
-                    if (index > 0) lastBaseline += lineHeight + PARAGRAPH_GAP
-                    lastBaseline += baselineSpan(layout)
-                }
-                Panel.Paragraphs(layouts, firstBaseline, (lastBaseline + bodyPaint.descent()).toInt())
-            }
+        /**
+         * Turns one parsed block into panels: a paragraph per panel, so a page can break between
+         * any two of them instead of holding the whole chapter; an illustration stays one panel.
+         */
+        private fun panels(source: Block): List<Panel> = when (source) {
+            is Block.Text -> source.text.split('\n').map(String::trim).filter(String::isNotEmpty).map(::paragraphPanel)
 
             is Block.Image -> {
                 val bitmap = images[source.url]
-                Panel.Figure(source.url, bitmap?.height ?: (CONTENT_WIDTH * PLACEHOLDER_RATIO).toInt())
+                listOf(Panel.Figure(source.url, bitmap?.height ?: (CONTENT_WIDTH * PLACEHOLDER_RATIO).toInt()))
             }
+        }
+
+        private fun paragraphPanel(paragraph: String): Panel.Paragraphs {
+            val layout = bodyLayout(paragraph)
+            val firstBaseline = -bodyPaint.ascent()
+            return Panel.Paragraphs(layout, firstBaseline, (firstBaseline + baselineSpan(layout) + bodyPaint.descent()).toInt())
         }
 
         /** Distance between the first and the last baseline of a paragraph. */
@@ -318,17 +416,16 @@ class TextInterceptor(
 
     /** Splits the rendered text into paragraphs and the illustrations between them. */
     private fun parse(text: String): List<Block> {
-        val marker = ChapterContent.IMAGE_MARKER
         val blocks = mutableListOf<Block>()
         val builder = StringBuilder()
         var index = 0
         while (index < text.length) {
-            if (text[index] != marker) {
+            if (text[index] != IMAGE_MARKER) {
                 builder.append(text[index])
                 index++
                 continue
             }
-            val end = text.indexOf(marker, index + 1)
+            val end = text.indexOf(IMAGE_MARKER, index + 1)
             if (end < 0) {
                 builder.append(text, index, text.length)
                 break
@@ -346,7 +443,7 @@ class TextInterceptor(
         builder.clear()
     }
 
-    /** Loads and scales every illustration of the page, once per render. */
+    /** Loads and scales every illustration of the chapter, once per render. */
     private fun loadImages(key: String, blocks: List<Block>): Map<String, Bitmap> {
         val urls = blocks.filterIsInstance<Block.Image>().map { it.url }.filter(String::isNotBlank).distinct()
         if (urls.isEmpty()) return emptyMap()
@@ -380,27 +477,47 @@ class TextInterceptor(
         return loaded
     }
 
-    /** Drops the loaded illustrations of a page, so a retry fetches them again. */
-    fun clean(key: String) = imageCache.keys.removeIf { it.startsWith(key) }
-
     private suspend fun loadImage(url: String): Bitmap {
         val raw = if (url.startsWith("//")) "https:$url" else url
         val response = client.newCall(GET(raw, headers)).awaitSuccess()
         val source = response.body.use { it.byteStream().use(BitmapFactory::decodeStream) }
         checkNotNull(source) { throw IOException("位图解码出错") }
-        return scaled(source)
+        return scaled(source, MAX_PAGE_HEIGHT)
     }
 
-    /** Fits the illustration to the text column, so it keeps the same margin on either side. */
-    private fun scaled(source: Bitmap): Bitmap {
-        if (source.width == PAGE_WIDTH) return source
-        val height = (source.height * (PAGE_WIDTH.toDouble() / source.width)).toInt().coerceAtLeast(1)
-        val result = Bitmap.createScaledBitmap(source, PAGE_WIDTH, height, true)
-        if (result !== source) source.recycle()
-        return result
+    /** Fits an illustration to the text column and to a height budget, so neither overflows. */
+    private fun scaled(source: Bitmap, maxHeight: Int): Bitmap {
+        var bitmap = source
+        if (bitmap.width != PAGE_WIDTH) {
+            val height = (bitmap.height * (PAGE_WIDTH.toDouble() / bitmap.width)).toInt().coerceAtLeast(1)
+            val result = Bitmap.createScaledBitmap(bitmap, PAGE_WIDTH, height, true)
+            if (result !== bitmap) bitmap.recycle()
+            bitmap = result
+        }
+        if (bitmap.height > maxHeight) {
+            val width = (bitmap.width * (maxHeight.toDouble() / bitmap.height)).toInt().coerceAtLeast(1)
+            val result = Bitmap.createScaledBitmap(bitmap, width, maxHeight, true)
+            if (result !== bitmap) bitmap.recycle()
+            bitmap = result
+        }
+        return bitmap
     }
 
-    /** The images a page keeps between renders, for the strict "load all images" retry. */
+    /** Decodes one fetched illustration and frames it with the reading margins. */
+    private fun frame(response: Response): Bitmap {
+        val source = response.body.byteStream().use(BitmapFactory::decodeStream)
+            ?: throw IOException("插图解码失败")
+        val bottom = X_PADDING.toInt()
+        val bitmap = scaled(source, MAX_PAGE_HEIGHT - bottom)
+        val page = Bitmap.createBitmap(WIDTH, bitmap.height + bottom, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(page)
+        val dark = isDark(pref, appDarkTheme(), systemDarkTheme())
+        canvas.drawColor(if (dark) Color.BLACK else Color.parseColor(pref.getString(PREF_SCREEN_STYLE, DEFAULT_SCREEN_STYLE)!!.split(' ')[0]))
+        canvas.drawBitmap(bitmap, (WIDTH - bitmap.width) / 2f, 0f, null)
+        return page
+    }
+
+    /** The images a chapter keeps between renders, for the strict "load all images" retry. */
     private val imageCache by lazy { ConcurrentHashMap<String, HashMap<String, Bitmap>>() }
 
     /** The page images the reader is opening; a full cache drops one to make room. */
@@ -445,6 +562,9 @@ class TextInterceptor(
     companion object {
         private const val HOST = "bilinovel-interceptor"
 
+        /** Marks an illustration URL whose response this interceptor frames with the page margins. */
+        const val FRAME = "bilinovel-frame"
+
         /** A single ideographic space, the way a Chinese paragraph opens. */
         private const val INDENT = "　"
 
@@ -452,6 +572,16 @@ class TextInterceptor(
         private const val TOP_MARGIN = 60
         private const val HEADING_GAP = 48
         private const val DIVIDER_HEIGHT = 2
+
+        /** How tall one page may grow before the body continues on the next one. */
+        private const val MAX_PAGE_HEIGHT = 2_400
+
+        /**
+         * How many chapters stay laid out, so switching back and forth does not redo the work.
+         * Linear reading only needs the previous and the current chapter; each laid-out chapter
+         * also keeps its scaled illustrations (~4 MB each), so this is a memory high-water mark.
+         */
+        private const val MAX_CHAPTERS = 2
 
         /** How many rendered pages, and how many pixels of them, stay ready to be served again. */
         private const val MAX_CACHED_PAGES = 12
@@ -503,7 +633,7 @@ private sealed interface Panel {
      * A run of paragraphs, each laid out on its own. Every paragraph is given a line and the blank
      * line below it; a paragraph that wraps asks for one more line step per line it adds.
      */
-    class Paragraphs(val layouts: List<StaticLayout>, val firstBaseline: Float, override val height: Int) : Panel
+    class Paragraphs(val layout: StaticLayout, val firstBaseline: Float, override val height: Int) : Panel
 
     class Figure(val url: String, override val height: Int) : Panel
 }

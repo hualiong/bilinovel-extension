@@ -1,9 +1,10 @@
 package eu.kanade.tachiyomi.extension.zh.bilinovel
 
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
+import android.widget.Toast
 import androidx.preference.PreferenceScreen
-import eu.kanade.tachiyomi.network.GET
-import eu.kanade.tachiyomi.network.awaitSuccess
 import eu.kanade.tachiyomi.source.ConfigurableSource
 import eu.kanade.tachiyomi.source.model.FilterList
 import eu.kanade.tachiyomi.source.model.MangasPage
@@ -12,29 +13,19 @@ import eu.kanade.tachiyomi.source.model.SChapter
 import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.model.SMangaUpdate
 import eu.kanade.tachiyomi.source.online.HttpSource
-import eu.kanade.tachiyomi.util.asJsoup
 import keiyoushi.annotation.Source
 import keiyoushi.network.rateLimit
-import keiyoushi.utils.get
-import keiyoushi.utils.getPreferencesLazy
-import keiyoushi.utils.selectInt
-import keiyoushi.utils.selectText
-import keiyoushi.utils.tryParse
-import kotlinx.coroutines.CompletableDeferred
+import keiyoushi.utils.applicationContext
+import keiyoushi.utils.getPreferences
+import keiyoushi.utils.getString
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.supervisorScope
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import okhttp3.HttpUrl.Companion.toHttpUrl
-import okhttp3.Response
-import org.jsoup.nodes.Document
-import org.jsoup.nodes.Element
-import org.jsoup.select.Elements
-import java.text.SimpleDateFormat
-import java.util.Locale
-import java.util.TimeZone
+import org.json.JSONArray
+import org.json.JSONObject
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.time.Duration.Companion.seconds
 
@@ -46,63 +37,374 @@ abstract class BiliNovel :
 
     // The settings of an earlier version are carried over as soon as the source is built, so a
     // reader that never opens this source's preferences still gets the migrated defaults.
-    private val pref by getPreferencesLazy { migratePreferences() }
+    // Both sources share one preference file (stored under the web source's id, i.e. the old one).
+    internal val pref by lazy { getPreferences(SHARED_PREFS_ID).also { it.migratePreferences() } }
+
+    /** One @Source class, two generated sources: the old site reader and the app API. */
+    internal val isWebMode get() = id == SHARED_PREFS_ID
+    private val web by lazy { BiliNovelWeb(this) }
 
     override fun setupPreferenceScreen(screen: PreferenceScreen) {
-        val isLoggedIn = client.cookieJar.loadForRequest(baseUrl.toHttpUrl()).any { it.name == "jieqiUserInfo" }
-        preferencesInternal(screen.context, pref, isLoggedIn).forEach(screen::addPreference)
+        // The screen persists to this source's own file while both sources read the shared one:
+        // adopt whatever the old split left behind, then push the shared truth back so the screen
+        // opens showing the values the reader actually has.
+        if (!isWebMode) {
+            val own = getPreferences(id)
+            if (own !== pref) {
+                own.all.forEach { (key, value) ->
+                    if (key in SHARED_PREF_KEYS && !pref.contains(key)) pref.mirror(key, value)
+                }
+                SHARED_PREF_KEYS.forEach { key -> own.mirror(key, pref.all[key]) }
+            }
+        }
+        // The progress switch only makes sense once a login is stored (cookie, token or credentials).
+        val loggedIn = if (isWebMode) {
+            client.cookieJar.loadForRequest(baseUrl.toHttpUrl()).any { it.name == "jieqiUserInfo" }
+        } else {
+            clientToken() != null || hasCredentials()
+        }
+        preferencesInternal(screen.context, pref, ::onCredentialsChanged, includeLink = isWebMode, isLoggedIn = loggedIn, loginStatus = { currentLoginStatus() }, loginError = { loginError })
+            .filterNot { if (isWebMode) it.key in CLIENT_ONLY_PREFS else it.key in WEB_ONLY_PREFS }
+            .forEach { p ->
+                if (p.key == PREF_ACCOUNT) loginPref = p
+                screen.addPreference(p)
+            }
     }
 
     override fun headersBuilder() = super.headersBuilder()
         .add("Referer", "$baseUrl/")
         .add("Accept-Language", "zh")
         .add("Accept", "*/*")
+        // The site serves the readable mobile layout only to a mobile UA.
+        .add("User-Agent", MOBILE_UA)
 
-    private val textInterceptor = TextInterceptor(super.client, headers, pref)
+    internal val textInterceptor = TextInterceptor(super.client, headers, pref)
+
+    /** The case ids of the books already in the official client's shelf, so they are looked up once. */
+    private val bookcaseIds = ConcurrentHashMap<Int, Int>()
+
+    /** The login item, so its summary can follow the session once the silent re-login settles. */
+    private var loginPref: androidx.preference.Preference? = null
+
+    /** Why the last login attempt failed; null while no failure is on record. */
+    @Volatile
+    internal var loginError: String? = null
+
+    @Volatile
+    private var loginPending = false
+
+    /** A credential edit takes effect at once: the old session and its shelf cache go, a complete new pair logs in right away. */
+    internal fun onCredentialsChanged() {
+        clearToken()
+        bookcaseIds.clear()
+        loginError = null
+        if (!hasCredentials()) {
+            toast("已退出登录")
+            refreshLoginSummary()
+            return
+        }
+        loginPending = true
+        CoroutineScope(Dispatchers.IO).launch {
+            val error = login()
+            loginPending = false
+            toast(error?.let { "登录失败：$it" } ?: "登录成功")
+            refreshLoginSummary()
+        }
+    }
+
+    private fun currentLoginStatus() = when {
+        loginPending -> LoginStatus.PENDING
+        clientToken() != null -> LoginStatus.ACTIVE
+        loginError != null -> LoginStatus.FAILED
+        else -> LoginStatus.NONE
+    }
+
+    internal fun refreshLoginSummary() = Handler(Looper.getMainLooper()).post {
+        loginPref?.summary = loginSummary(pref, currentLoginStatus(), loginError)
+    }
+
+    private fun toast(text: String) = Handler(Looper.getMainLooper()).post {
+        Toast.makeText(applicationContext, text, Toast.LENGTH_SHORT).show()
+    }
 
     override val client = super.client.newBuilder().also {
         val s = pref.getString(PREF_RATE_LIMIT, "10/10")!!.split("/")
         it.rateLimit(s[0].toInt(), s[1].toInt().seconds) { url ->
-            url.host == baseUrl.removePrefix("https://")
+            url.host == baseUrl.removePrefix("https://") || url.host == API_HOST
         }
-    }.addInterceptor(textInterceptor).addNetworkInterceptor(ChapterInterceptor()).build()
+    }.addNetworkInterceptor(WebChapterInterceptor()).addInterceptor(textInterceptor).build()
 
-    // Customize
+    // Details and chapter list
 
-    /** The image URL of every page the reader has opened, so it is rendered only once. */
-    private val pageImages = ConcurrentHashMap<String, String>()
+    override suspend fun getMangaUpdate(
+        manga: SManga,
+        chapters: List<SChapter>,
+        fetchDetails: Boolean,
+        fetchChapters: Boolean,
+    ): SMangaUpdate {
+        if (isWebMode) return web.update(manga, chapters, fetchDetails, fetchChapters)
+        val articleId = manga.novelId
+        val updated = if (fetchDetails) {
+            apiPost(
+                "novel/getNovelInfo",
+                JSONObject().put("articleid", articleId),
+                mapOf("countVisit" to "false"),
+                restricted = true,
+            ).data().toSManga(complete = true)
+        } else {
+            manga
+        }
+        return SMangaUpdate(updated, if (fetchChapters) getChapterList(articleId) else chapters)
+    }
 
-    /** The chapter log version the reading order seed was read from, kept for the session. */
-    private var salt: Pair<Int, Int>? = null
+    /** A list entry only carries what the list shows; the details answer fills the rest. */
+    private fun JSONObject.toSManga(complete: Boolean = false) = SManga.create().apply {
+        setUrlWithoutDomain("/novel/${int("articleid")}.html")
+        title = str("articlename")
+        author = str("author").ifBlank { null }
+        artist = str("illustrator").ifBlank { null }
+        thumbnail_url = str("cover")
+        description = buildDescription(this@toSManga)
+        genre = str("keywords").split(' ').filter(String::isNotBlank).joinToString()
+        status = if (int("fullflag") == 1) SManga.COMPLETED else SManga.ONGOING
+        initialized = complete
+    }
 
-    /**
-     * The site now answers a keyword search with an image captcha until the reader verifies
-     * once, after which searches are admitted for 30 minutes. The old `search_guard` cookies
-     * are no longer issued.
-     *
-     * The captcha cannot be shown here, but the cookie it leaves behind lives in the same
-     * cookie jar the web view writes to, so a reader who verifies there can search normally.
-     */
-    private fun Response.hasCaptcha() = peekBody(16_384).string().let { it.contains("search_challenge") || it.contains("搜索验证") }
+    private fun buildDescription(novel: JSONObject): String {
+        val configs = pref.getStringSet(PREF_DESCRIPTION, DEFAULT_SET)!!
+        val description = StringBuilder(novel.str("intro").formatText("\n\n\n"))
+        if ("A" in configs) {
+            novel.str("notice").formatText("\n").takeIf(String::isNotBlank)?.let {
+                description.insert(0, "> $it\n\n")
+            }
+        }
+        if ("B" in configs) {
+            novel.str("backupname").takeIf(String::isNotBlank)?.let {
+                description.append("\n\n***别名**：$it* ")
+            }
+        }
+        return description.toString().convert(pref.getBoolean(PREF_DISPLAY_TRADITIONAL, false))
+    }
+
+    private suspend fun getChapterList(articleId: Int): List<SChapter> {
+        val data = apiPost(
+            "novel/getchapter",
+            JSONObject().put("articleid", articleId),
+            restricted = true,
+        ).data()
+        val switch = pref.getBoolean(PREF_DISPLAY_TRADITIONAL, false)
+        val articleName = data.str("articlename")
+        // The API gives no per-chapter date, so every chapter carries the book's last update, as before.
+        val updatedAt = data.optLong("lastupdate") * 1000
+        val chapters = mutableListOf<SChapter>()
+
+        data.arr("chapters")?.objects()?.forEach { volume ->
+            val volumeName = volume.str("chaptername")
+            // A root entry is either a volume wrapping chapters or a flat chapter of its own.
+            val children = volume.arr("chapterList")?.objects().orEmpty().ifEmpty { listOf(volume) }
+            children.forEach { chapter ->
+                if (chapter.int("chaptertype") == 1) return@forEach
+                chapters += SChapter.create().apply {
+                    setUrlWithoutDomain("/novel/$articleId/${chapter.int("chapterid")}.html")
+                    name = chapter.str("chaptername").toHalfWidthDigits().convert(switch)
+                    scanlator = volumeName.takeIf(String::isNotBlank)?.convert(switch)
+                    date_upload = updatedAt
+                    // The bookmark sync needs the book title, which the chapter list carries.
+                    memo = buildJsonObject { put("title", articleName) }
+                }
+            }
+        }
+        // The reader expects the newest chapter first, while the API lists them in reading order.
+        return chapters.reversed()
+    }
+
+    // Pages
+
+    override suspend fun getPageList(chapter: SChapter): List<Page> {
+        if (isWebMode) return web.pages(chapter)
+        val (articleId, chapterId) = chapter.ids
+        val data = apiPost(
+            "novel/getNovelText",
+            query = mapOf("articleid" to articleId, "chapterid" to chapterId),
+            restricted = true,
+        ).data()
+        val switch = pref.getBoolean(PREF_DISPLAY_TRADITIONAL, false)
+        val key = "$articleId-$chapterId"
+        val text = chapterText(
+            data.str("text").convert(switch),
+            data.arr("images")?.objects()?.map { it.str("path") } ?: emptyList(),
+            data.optBoolean("isImage"),
+            baseUrl,
+        )
+        val entries = textInterceptor.prepare(key, data.str("chaptername").convert(switch), text)
+        val articleName = runCatching { chapter.memo.getString("title") }.getOrNull()
+        syncReadingProgress(articleId.toInt(), chapterId.toInt(), data.str("chaptername"), articleName)
+        // An illustration page keeps its own URL: Mihon requests it, and the interceptor frames
+        // the response with the reading margins.
+        return List(entries.size) { i ->
+            Page(i, entries[i]?.let { url -> "$url#${TextInterceptor.FRAME}" } ?: textInterceptor.pageUrl(key, i))
+        }
+    }
+
+    override suspend fun getImageUrl(page: Page): String = if (isWebMode) web.image(page) else page.url
+
+    // Popular
+
+    override suspend fun getPopularManga(page: Int): MangasPage {
+        if (isWebMode) return web.popular(page)
+        val suffix = pref.getString(PREF_POPULAR_DISPLAY, DEFAULT_POPULAR)!!
+        if (suffix == NEW_BOOK_SUFFIX) {
+            return apiPost(
+                "novel/getNewBookRanking",
+                JSONObject().put("page", page).put("limit", PAGE_SIZE),
+            ).bookPage()
+        }
+        val (type, period) = POPULAR_RANKINGS[suffix] ?: POPULAR_RANKINGS.getValue(DEFAULT_POPULAR)
+        val body = JSONObject().put("page", page).put("limit", PAGE_SIZE).put("type", type)
+        period?.let { body.put("period", it) }
+        return apiPost("novel/getRanking", body).bookPage()
+    }
+
+    private fun JSONObject.bookPage(): MangasPage {
+        val books = dataArray().objects()
+        return MangasPage(books.map { it.toSManga() }, optBoolean("hasMore", books.size >= PAGE_SIZE))
+    }
+
+    // Latest
+
+    override suspend fun getLatestUpdates(page: Int): MangasPage {
+        if (isWebMode) return web.latest(page)
+        return apiPost(
+            "novel/getRanking",
+            JSONObject().put("page", page).put("limit", PAGE_SIZE).put("type", LAST_UPDATE_RANKING),
+        ).bookPage()
+    }
+
+    // Search
+
+    override fun getFilterList() = if (isWebMode) web.filters() else buildFilterList()
+
+    override suspend fun getSearchManga(page: Int, query: String, filters: FilterList): MangasPage {
+        if (isWebMode) return web.search(page, query, filters)
+        NOVEL_ID_REGEX.find(query)?.let { match ->
+            val novel = apiPost(
+                "novel/getNovelInfo",
+                JSONObject().put("articleid", match.groupValues[1].toInt()),
+                mapOf("countVisit" to "false"),
+                restricted = true,
+            ).data().toSManga(complete = true)
+            return MangasPage(listOf(novel), false)
+        }
+
+        val body = JSONObject().put("searchKey", query).put("recordKeyword", true).put("limit", PAGE_SIZE)
+        if (query.isBlank()) {
+            filters.filterIsInstance<RegionFilter>().firstOrNull()?.toString()?.takeIf(String::isNotBlank)
+                ?.let { body.put("filterRGroup", it.toInt()) }
+            filters.filterIsInstance<ThemeFilter>().firstOrNull()?.toString()?.takeIf(String::isNotBlank)?.let {
+                body.put("tagNames", JSONArray().put(it))
+                body.put("tagMatchMode", "all")
+            }
+            filters.filterIsInstance<SortFilter>().firstOrNull()?.toString()?.let { body.put("sortBy", it) }
+            filters.filterIsInstance<AnimeFilter>().firstOrNull()?.toString()?.takeIf(String::isNotBlank)
+                ?.let { body.put("animeFilter", it.toInt()) }
+            filters.filterIsInstance<CountFilter>().firstOrNull()?.let {
+                it.minWords?.let { min -> body.put("minWords", min) }
+                it.maxWords?.let { max -> body.put("maxWords", max) }
+            }
+            filters.filterIsInstance<StatusFilter>().firstOrNull()?.toString()?.takeIf(String::isNotBlank)
+                ?.let { body.put("filterFullFlag", it.toInt()) }
+        }
+        return apiPost(
+            "novel/searchNovel",
+            body,
+            mapOf("pageNum" to page.toString(), "pageSize" to PAGE_SIZE.toString()),
+        ).bookPage()
+    }
+
+    /** Mirrors the web bookmark: records the chapter as read in the official client's shelf. */
+    private suspend fun syncReadingProgress(articleId: Int, chapterId: Int, chapterName: String, articleName: String?) {
+        if (!pref.getBoolean(PREF_AUTO_BOOKMARK, false)) return
+        CoroutineScope(Dispatchers.IO).launch {
+            runCatching {
+                if (clientToken() == null) return@runCatching
+                var caseId = bookcaseIds[articleId]
+                if (caseId == null) {
+                    val check = apiPost(
+                        "bookcase/check",
+                        JSONObject().put("articleid", articleId),
+                        retryLogin = false,
+                    ).data()
+                    if (!check.optBoolean("inBookcase")) {
+                        // The web bookmark added the book when it was missing; the client does the same.
+                        articleName?.takeIf(String::isNotBlank)?.let {
+                            apiPost(
+                                "bookcase/add",
+                                JSONObject()
+                                    .put("articleid", articleId)
+                                    .put("articlename", it)
+                                    .put("classid", 0)
+                                    .put("chapterid", chapterId)
+                                    .put("chaptername", chapterName)
+                                    .put("pageid", 1),
+                            )
+                        }
+                        return@runCatching
+                    }
+                    caseId = check.optJSONObject("bookcase")?.optInt("caseid")?.takeIf { it > 0 }
+                    caseId?.let { bookcaseIds[articleId] = it }
+                }
+                caseId?.let {
+                    apiPost(
+                        "bookcase/updateProgress",
+                        JSONObject()
+                            .put("caseid", it)
+                            .put("chapterid", chapterId)
+                            .put("chaptername", chapterName)
+                            .put("pageid", 1),
+                    )
+                }
+            }.onFailure { Log.e("BiliNovel", "同步阅读进度失败: ${it.message}") }
+        }
+    }
+
+    // Helpers
+
+    private fun hasCredentials() = !pref.getString(PREF_ACCOUNT, null).isNullOrBlank() && !pref.getString(PREF_PASSWORD, null).isNullOrBlank()
+
+    private val SManga.novelId get() = NOVEL_ID_REGEX.find(url)!!.groupValues[1].toInt()
+
+    private val SChapter.ids get() = CHAPTER_IDS_REGEX.find(url)!!.groupValues.let { it[1] to it[2] }
 
     companion object {
-        const val BOOKMARK_URL = "%s/modules/article/addbookcase.php?bid=%s&cid=%s&pid=1&ajax_request=1"
-        val DATE_REGEX = Regex("\\d{4}-\\d{1,2}-\\d{1,2}")
-        val PAGE_REGEX = Regex("第(\\d+)/(\\d+)页")
-        val NOVEL_ID_REGEX = Regex("/novel/(\\d+)\\.html")
-        val CHAPTER_IDS_REGEX = Regex("/novel/(\\d+)/(\\d+)(?:_(\\d+))?\\.html")
-        val PAGE_SIZE_REGEX = Regex("（\\d+/(\\d+)）")
-        val EXPRESSION_REGEX = Regex("Number.*?;")
-        val SALT_REGEX = Regex("(?<![a-zA-Z0-9_])-?0x[0-9a-fA-F]+(?:[+*\\-]-?0x[0-9a-fA-F]+)+")
-        val CHAPTERLOG_REGEX = Regex("/themes/zhmb/js/chapterlog\\.js\\?v[^\"]+")
+        /** Preferences live under the web source's id, so both sources read and write the same file. */
+        private const val SHARED_PREFS_ID = 6_832_494_364_245_687_154L
+        private const val PAGE_SIZE = 50
+        internal const val API_HOST = "api.readpai.com"
+        private const val MOBILE_UA =
+            "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
+        private val CLIENT_ONLY_PREFS = setOf(PREF_ACCOUNT, PREF_PASSWORD)
 
-        /** Used when the chapter carries no script of its own, which happens on short chapters. */
-        val DEFAULT_SALT = 0 to 0
-        val NEWLINE_REGEX = Regex("(?:\n\r\n)+")
-        val DATE_FORMAT = SimpleDateFormat("yyyy-MM-dd", Locale.ENGLISH).apply {
-            timeZone = TimeZone.getTimeZone("UTC+8")
-        }
-        val TRADITIONAL_CHARACTER_MAP = mapOf(
+        // The strict image preload only concerns the web reader; the client fetches per page.
+        private val WEB_ONLY_PREFS = setOf(PREF_LOAD_ALL_IMAGES)
+
+        private const val DEFAULT_POPULAR = "/top/weekvisit/%d.html"
+        private const val NEW_BOOK_SUFFIX = "/top/newhot/%d.html"
+        private const val LAST_UPDATE_RANKING = 7
+
+        /** Ranking type and period of every choice in the "热门显示内容" setting. */
+        private val POPULAR_RANKINGS = mapOf(
+            "/top/monthvisit/%d.html" to (1 to "month"),
+            "/top/weekvisit/%d.html" to (1 to "week"),
+            "/top/monthvote/%d.html" to (6 to "month"),
+            "/top/weekvote/%d.html" to (6 to "week"),
+            "/top/monthflower/%d.html" to (4 to "month"),
+            "/top/weekflower/%d.html" to (4 to "week"),
+            "/top/postdate/%d.html" to (2 to null),
+            "/top/goodnum/%d.html" to (5 to null),
+        )
+
+        internal val TRADITIONAL_CHARACTER_MAP = mapOf(
+
             '皑' to '皚', '蔼' to '藹', '碍' to '礙', '爱' to '愛', '翱' to '翺', '袄' to '襖',
             '奥' to '奧', '坝' to '壩', '罢' to '罷', '摆' to '擺', '败' to '敗', '颁' to '頒',
             '办' to '辦', '绊' to '絆', '帮' to '幫', '绑' to '綁', '镑' to '鎊', '谤' to '謗',
@@ -320,323 +622,16 @@ abstract class BiliNovel :
             '谆' to '諄', '着' to '著', '浊' to '濁', '兹' to '茲', '资' to '資', '渍' to '漬',
             '踪' to '蹤', '综' to '綜', '总' to '總', '纵' to '縱', '邹' to '鄒', '诅' to '詛',
             '组' to '組', '钻' to '鑽', '为' to '為',
+
         )
     }
-
-    private val SManga.id get() = NOVEL_ID_REGEX.find(url)!!.groups[1]!!.value
-    private val Page.ids get() = CHAPTER_IDS_REGEX.find(url)!!.groups.drop(1).map { it?.value }
-    private fun String.toHalfWidthDigits() = this.map { if (it in '０'..'９') it - 65248 else it }.joinToString("")
-
-    private fun String.convert(
-        switch: Boolean = pref.getBoolean(PREF_DISPLAY_TRADITIONAL, false),
-    ) = this.takeIf { switch }?.map { c -> TRADITIONAL_CHARACTER_MAP.getOrDefault(c, c) }?.joinToString("") ?: this
-
-    private fun Element.formatText(c: String) = this.wholeText().replace(NEWLINE_REGEX, c).trim()
-
-    private fun Elements.mapToChapter(switch: Boolean, date: Long, volume: String? = null) = mapIndexed { i, element ->
-        val url = element.absUrl("href").takeUnless("javascript:cid(1)"::equals)
-        SChapter.create().apply {
-            setUrlWithoutDomain(url ?: getChapterUrlByContext(i, this@mapToChapter))
-            name = element.text().toHalfWidthDigits().convert(switch)
-            date_upload = date
-            volume?.let { scanlator = it.convert(switch) }
-        }
-    }
-
-    private fun buildDescription(doc: Document): String {
-        val configs = pref.getStringSet(PREF_DESCRIPTION, DEFAULT_SET)!!
-        val desc = StringBuilder(doc.selectFirst("#bookSummary > content")!!.formatText("\n\n\n"))
-        for (item in configs) {
-            when (item) {
-                "A" -> {
-                    desc.insert(
-                        0,
-                        doc.selectFirst(".notice")?.let { "> ${it.formatText("\n")}\n\n" } ?: "",
-                    )
-                }
-
-                "B" -> {
-                    desc.append(
-                        doc.selectFirst(".bkname-body")?.let { "\n\n\n***别名**：${it.text()}* " } ?: "",
-                    )
-                }
-
-                "C" -> {
-                    desc.append(
-                        doc.selectFirst(".book-detail-btn .btn-group-cell:last-child > a.orange")
-                            ?.attr("href")?.substringAfter('?')
-                            ?.let { "\n\n\n***[跳转至「嗶哩漫畫」上的同名漫画](https://www.bilimanga.net/detail/$it.html)*** " }
-                            ?: "",
-                    )
-                }
-            }
-        }
-        return desc.toString()
-    }
-
-    private fun calculate(expression: String): Int {
-        var newExpression = expression.replace(" ", "")
-        val hexPattern = Regex("(-?)0x([0-9a-fA-F]+)")
-        newExpression = hexPattern.replace(newExpression) { matchResult ->
-            val sign = matchResult.groupValues[1]
-            val hexStr = matchResult.groupValues[2]
-            var num = hexStr.toLong(16)
-            if (sign == "-") {
-                num = -num
-            }
-            num.toString()
-        }
-        val tokenRegex = Regex("-?\\d+|[+*/-]")
-        val tokens = tokenRegex.findAll(newExpression).map { it.value }.toList()
-        if (tokens.isEmpty()) {
-            return 0
-        }
-        val intermediateTokens = mutableListOf<String>()
-        var index = 0
-        while (index < tokens.size) {
-            val token = tokens[index]
-            if (token == "*" || token == "/") {
-                if (intermediateTokens.isEmpty()) {
-                    throw IllegalArgumentException("Invalid expression: operator without left operand")
-                }
-                val left = intermediateTokens.removeAt(intermediateTokens.size - 1).toInt()
-                if (index + 1 >= tokens.size) {
-                    throw IllegalArgumentException("Invalid expression: operator without right operand")
-                }
-                val right = tokens[index + 1].toInt()
-                if (token == "/" && right == 0) {
-                    throw ArithmeticException("Division by zero")
-                }
-                val result = if (token == "*") left * right else left / right
-                intermediateTokens.add(result.toString())
-                index += 2
-            } else {
-                intermediateTokens.add(token)
-                index++
-            }
-        }
-        if (intermediateTokens.isEmpty()) {
-            return 0
-        }
-        var result = intermediateTokens[0].toInt()
-        index = 1
-        while (index < intermediateTokens.size) {
-            val op = intermediateTokens[index]
-            if (op == "+" || op == "-") {
-                if (index + 1 >= intermediateTokens.size) {
-                    throw IllegalArgumentException("Invalid expression: operator without right operand")
-                }
-                val nextNum = intermediateTokens[index + 1].toInt()
-                if (op == "+") {
-                    result += nextNum
-                } else {
-                    result -= nextNum
-                }
-                index += 2
-            } else {
-                throw IllegalArgumentException("Invalid operator: $op")
-            }
-        }
-        return result
-    }
-
-    private fun getChapterUrlByContext(i: Int, els: Elements) = when (i) {
-        els.lastIndex -> "${els[i - 1].attr("href").replace(".html", "_66.html")}#next"
-        else -> "${els[i + 1].attr("href")}#prev"
-    }
-
-    // Manga View Page
-
-    override suspend fun getPageList(chapter: SChapter): List<Page> {
-        // One request tells us how many pages the site serves the chapter in. Each page keeps its
-        // own url and is rendered on its own when the reader reaches it, by getImageUrl below.
-        val urls = sourcePages(chapter.url)
-        return urls.mapIndexed { index, url -> Page(index, url) }
-    }
-
-    /**
-     * The chapter's pages, as absolute urls. Only a later page carries the counter of the whole
-     * chapter in its title, so the second one is what tells us how many there are.
-     */
-    private suspend fun sourcePages(url: String): List<String> {
-        val first = url.let { if (it.contains("#")) it else it.replace(".", "_2.") }
-        val doc = client.get(baseUrl + first, headers).asJsoup()
-        val size = PAGE_SIZE_REGEX.find(doc.selectText("#atitle")!!)?.groups?.get(1)?.value?.toInt() ?: 1
-        val prefix = doc.location().substringBeforeLast("_")
-        return List(size.coerceAtLeast(1)) { i -> prefix + "${if (i > 0) "_${i + 1}" else ""}.html" }
-    }
-
-    /** The reading order seed the site hides in its chapter script. */
-    private suspend fun ensureSalt(doc: Document): Pair<Int, Int> {
-        salt?.let { return it }
-        val path = CHAPTERLOG_REGEX.find(doc.body().toString())?.value ?: return DEFAULT_SALT
-        var first = 0
-        var second = 0
-        EXPRESSION_REGEX.findAll(client.get(baseUrl + path, headers).body.string()).forEach { match ->
-            val expressions = SALT_REGEX.findAll(match.value)
-            if (expressions.count() != 2) return@forEach
-            val values = expressions.map { calculate(it.value) }
-            values.first().takeIf { it > 100 }?.let { first = it }
-            values.last().takeIf { it > 200 }?.let { second = it }
-        }
-        return Pair(first, second).also {
-            Log.v("BiliNovel", "chapterlog: ${path.substringAfter("?")}, salt1: $first, salt2: $second")
-            salt = it
-        }
-    }
-
-    // Image
-
-    override suspend fun getImageUrl(page: Page): String {
-        val ids = page.ids
-        val key = "${ids[0]}-${ids[1]}-${page.index}"
-        if (!page.url.contains('_')) { // 只在第一页，请求书签API
-            if (pref.getBoolean(PREF_LOAD_ALL_IMAGES, false)) {
-                // Drop what this chapter rendered, so a retry reads and draws every illustration again.
-                textInterceptor.clean("${ids[0]}-${ids[1]}")
-                pageImages.keys.removeIf { it.startsWith("${ids[0]}-${ids[1]}-") }
-            }
-            if (pref.getBoolean(PREF_AUTO_BOOKMARK, false)) {
-                val apiUrl = BOOKMARK_URL.format(baseUrl, ids[0], ids[1])
-                CoroutineScope(currentCoroutineContext()).launch(Dispatchers.IO) {
-                    try {
-                        val response = client.get(apiUrl, headers)
-                        if (response.body.string().startsWith("对不起")) {
-                            pref.edit().putBoolean(PREF_AUTO_BOOKMARK, false).apply()
-                        }
-                    } catch (e: Exception) {
-                        pref.edit().putBoolean(PREF_AUTO_BOOKMARK, false).apply()
-                        Log.e("BiliNovel", e.message ?: e.javaClass.name)
-                    }
-                }
-            }
-        }
-        // The site's own pagination is kept: every page of the chapter is rendered by itself. A
-        // page the cache has since dropped is rendered again instead of failing to be served.
-        return pageImages[key]?.takeIf(textInterceptor::holds)
-            ?: render(page, ids, key).also { pageImages[key] = it }
-    }
-
-    /** Reads one site page into an image, with the title and illustrations it carries. */
-    private suspend fun render(page: Page, ids: List<String?>, key: String): String {
-        val doc = client.get(page.url, headers).asJsoup()
-        doc.selectFirst("#acontent > .center-note")?.run { throw Exception(text()) }
-        val content = doc.selectFirst("#acontent") ?: throw Exception("页面已失效，请刷新本章节")
-        val switch = pref.getBoolean(PREF_DISPLAY_TRADITIONAL, false)
-        val text = collectBlocks(content, ids[1]!!.toInt(), ensureSalt(doc)).text
-        return textInterceptor.pageUrl("$key|${page.url}", chapterTitle(doc).convert(switch), text.convert(switch))
-    }
-
-    private fun mangaPageParse(response: Response) = response.asJsoup().let { doc ->
-        val mangas = doc.select(".book-layout").map {
-            SManga.create().apply {
-                setUrlWithoutDomain(it.absUrl("href"))
-                val img = it.selectFirst("img")!!
-                thumbnail_url = img.absUrl("data-src")
-                title = img.attr("alt").convert()
-            }
-        }
-        val hasNextPage = when (response.request.url.pathSegments.first()) {
-            "wenku" -> {
-                doc.selectInt("#pagelink > strong") < doc.selectInt("#pagelink > .last")
-            }
-
-            "search" -> {
-                val find = doc.selectText("#pagelink > span")?.let(PAGE_REGEX::find)
-                find != null && find.groups[1]!!.value.toInt() < find.groups[2]!!.value.toInt()
-            }
-
-            else -> mangas.size == 50
-        }
-        MangasPage(mangas, hasNextPage)
-    }
-
-    private fun Response.parseManga() = SManga.create().apply {
-        val doc = asJsoup()
-        val switch = pref.getBoolean(PREF_DISPLAY_TRADITIONAL, false)
-        doc.selectFirst(".aui-ver-form")?.run { throw Exception(text()) }
-        val meta = doc.select(".book-meta")[1].text().convert(switch).split("|")
-        val tags = doc.select(".tag-small").map { it.text().convert(switch) }
-        setUrlWithoutDomain(doc.location())
-        title = doc.selectText(".book-title")!!.convert(switch)
-        thumbnail_url = doc.selectFirst(".book-cover")!!.attr("src")
-        description = buildDescription(doc).convert(switch)
-        author = doc.selectText(".authorname")?.convert(switch)
-        artist = doc.selectText(".illname")?.substringBefore('(')?.convert(switch)
-        status = when (meta.getOrNull(1)) {
-            "连载", "連載" -> SManga.ONGOING
-            "完结", "完結" -> SManga.COMPLETED
-            else -> SManga.UNKNOWN
-        }
-        genre = (tags + meta.getOrElse(2) { "" }).joinToString()
-        initialized = true
-    }
-
-    // Popular Page
-
-    override suspend fun getPopularManga(page: Int): MangasPage {
-        val suffix = pref.getString(PREF_POPULAR_DISPLAY, "/top/weekvisit/%d.html")!!
-        return mangaPageParse(client.get(baseUrl + String.format(suffix, page), headers))
-    }
-
-    // Latest Page
-
-    override suspend fun getLatestUpdates(page: Int): MangasPage = mangaPageParse(client.get("$baseUrl/top/lastupdate/$page.html", headers))
-
-    // Search Page
-
-    override fun getFilterList() = buildFilterList()
-
-    override suspend fun getSearchManga(page: Int, query: String, filters: FilterList): MangasPage {
-        val request = NOVEL_ID_REGEX.find(query)?.value?.let { GET(baseUrl + it, headers) } ?: run {
-            val url = baseUrl.toHttpUrl().newBuilder()
-            if (query.isNotBlank()) {
-                url.addPathSegment("search").addPathSegment("${query}_$page.html")
-            } else {
-                url.addPathSegment("wenku")
-                    .addPathSegment("${filters[3]}_${filters[2]}_${filters[6]}_${filters[4]}_${filters[1]}_0_0_${filters[5]}_${page}_0.html")
-            }
-            GET(url.build(), headers)
-        }
-        val response = client.newCall(request).awaitSuccess()
-        if (response.request.url.pathSegments.contains("novel")) {
-            return MangasPage(listOf(response.parseManga()), false)
-        }
-        if (query.isNotBlank() && response.hasCaptcha()) throw Exception("请先在 WebView 中点击输入框进行搜索，再手动通过验证")
-        return mangaPageParse(response)
-    }
-
-    // Manga Update
-
-    override suspend fun getMangaUpdate(
-        manga: SManga,
-        chapters: List<SChapter>,
-        fetchDetails: Boolean,
-        fetchChapters: Boolean,
-    ) = supervisorScope {
-        val asyncManga = if (fetchDetails) {
-            async { client.get(baseUrl + manga.url, headers).parseManga() }
-        } else {
-            CompletableDeferred(manga)
-        }
-
-        val asyncChapters = if (fetchChapters) {
-            async {
-                val doc = client.get("$baseUrl/novel/${manga.id}/catalog", headers).asJsoup()
-                val switch = pref.getBoolean(PREF_DISPLAY_TRADITIONAL, false)
-                val info = doc.selectText(".chapter-sub-title")!!
-                val title = doc.selectText(".book-title")!!
-                val date = DATE_FORMAT.tryParse(DATE_REGEX.find(info)?.value)
-                doc.select(".catalog-volume").takeIf(Elements::isNotEmpty)?.flatMap {
-                    val bar = it.selectText(".chapter-bar")!!.substring(title.length + 1)
-                    val volume = if (bar.first().isDigit()) "Vol.$bar" else bar.toHalfWidthDigits()
-                    it.select(".chapter-li-a").mapToChapter(switch, date, volume)
-                }?.reversed() ?: doc.select(".chapter-li-a").mapToChapter(switch, date).reversed()
-            }
-        } else {
-            CompletableDeferred(chapters)
-        }
-
-        SMangaUpdate(asyncManga.await(), asyncChapters.await())
-    }
 }
+
+/** Shared by both sources: the site's url shapes and the text cleanups. */
+internal val NOVEL_ID_REGEX = Regex("/novel/(\\d+)\\.html")
+internal val CHAPTER_IDS_REGEX = Regex("/novel/(\\d+)/(\\d+)(?:_(\\d+))?\\.html")
+internal val NEWLINE_REGEX = Regex("(?:\\r?\\n)+")
+
+internal fun String.toHalfWidthDigits() = map { if (it in '０'..'９') it - 65248 else it }.joinToString("")
+internal fun String.formatText(c: String) = replace(NEWLINE_REGEX, c).trim()
+internal fun String.convert(switch: Boolean) = if (switch) map { BiliNovel.TRADITIONAL_CHARACTER_MAP.getOrDefault(it, it) }.joinToString("") else this

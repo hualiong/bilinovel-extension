@@ -5,7 +5,8 @@ import okhttp3.Interceptor
 import okhttp3.Response
 import java.io.IOException
 
-class ChapterInterceptor : Interceptor {
+/** The web reader's missing-chapter fallback and the PC-page redirect it refuses. */
+class WebChapterInterceptor : Interceptor {
 
     companion object {
         val PREV_URL_REGEX = Regex("url_previous:'(.*?)'")
@@ -35,6 +36,7 @@ class ChapterInterceptor : Interceptor {
 
     override fun intercept(chain: Interceptor.Chain): Response {
         val origin = chain.request()
+        if (origin.url.host == BiliNovel.API_HOST) return chain.proceed(origin)
         regexOf(origin.url.fragment)?.let {
             val response = chain.proceed(origin.newBuilder().removeHeader("Accept-Encoding").build())
             val path = it.find(response.body.string())?.groups?.get(1)?.value ?: predictUrlByContext(origin.url)
@@ -44,7 +46,7 @@ class ChapterInterceptor : Interceptor {
             .also { resp ->
                 if (resp.isRedirect && resp.header("Location")?.indexOf("linovelib") != -1) {
                     resp.close()
-                    throw IOException("不支持PC端查看，请在设置中更换移动端UA标识")
+                    throw IOException("不支持PC端查看，请在 Mihon 设置中更换移动端 UA")
                 }
             }
     }

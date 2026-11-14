@@ -6,17 +6,25 @@ plugins {
 
 keiyoushi {
     name = "BiliNovel"
-    versionCode = 27
+    versionCode = 28
     contentWarning = ContentWarning.SAFE
     libVersion = "1.6"
 
+    // The site reader first, under the same name and id existing libraries already use.
     source {
         name = "哔哩轻小说"
         lang = "zh"
+        id = 6_832_494_364_245_687_154L
         baseUrl {
-            // Generated `baseUrl` + preference screen come from :core's MirrorPreferences
             mirrors("https://www.bilinovel.com", "https://www.bilinovel.net")
         }
+    }
+
+    // The official app's API as a second, independent source.
+    source {
+        name = "哔哩轻小说（APP）"
+        lang = "zh"
+        baseUrl = "https://www.bilinovel.net"
     }
 
     deeplink {
