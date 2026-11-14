@@ -6,7 +6,7 @@ plugins {
 
 keiyoushi {
     name = "Hikarinagi"
-    versionCode = 4
+    versionCode = 5
     contentWarning = ContentWarning.MIXED
     libVersion = "1.6"
 
@@ -15,9 +15,11 @@ keiyoushi {
         baseUrl = "https://www.hikarinagi.org"
     }
 
+    // Keep the id existing libraries already use, so the rename does not orphan them.
     source {
-        name = "Hikarinagi Novels"
+        name = "Hikarinagi Novel"
         lang = "zh"
+        id = 1_148_300_780_955_902_112L
         baseUrl = "https://www.hikarinagi.org"
     }
 }

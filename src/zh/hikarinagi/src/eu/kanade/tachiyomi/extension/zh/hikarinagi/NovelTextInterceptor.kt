@@ -18,6 +18,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Response
 import okhttp3.ResponseBody.Companion.toResponseBody
 import java.io.ByteArrayOutputStream
+import kotlin.math.roundToInt
 
 /** Renders a page of novel text into an image for continuous (vertical) reading. */
 class NovelTextInterceptor(private val preferences: SharedPreferences) : Interceptor {
@@ -41,7 +42,7 @@ class NovelTextInterceptor(private val preferences: SharedPreferences) : Interce
     }
 
     private fun render(title: String, text: String, topPadding: Boolean): Bitmap {
-        val dark = Preferences.isDark(preferences, appCompatDarkTheme(), systemDarkTheme())
+        val dark = isDark(preferences)
         val textPaint = TextPaint(bodyPaint).apply { color = if (dark) DARK_TEXT else LIGHT_TEXT }
         val titlePaint = TextPaint(headingPaint).apply { color = if (dark) DARK_TEXT else LIGHT_TEXT }
         val divider = Paint().apply {
@@ -53,7 +54,7 @@ class NovelTextInterceptor(private val preferences: SharedPreferences) : Interce
         val paragraphs = text.split('\n').filter(String::isNotBlank).map { bodyLayout(it, textPaint) }
 
         val headingBlock = heading?.let { it.height + 2 * HEADING_GAP + DIVIDER_HEIGHT } ?: 0
-        // Chapters and illustrations start with breathing room; a continued page does not.
+        // A chapter opens with breathing room above its heading; a continued page does not.
         val topMargin = if (heading != null || topPadding) TOP_MARGIN else 0
         val firstBaseline = (topMargin + headingBlock) - textPaint.ascent()
         var lastBaseline = firstBaseline
@@ -62,7 +63,7 @@ class NovelTextInterceptor(private val preferences: SharedPreferences) : Interce
             lastBaseline += baselineSpan(layout)
         }
 
-        val height = (lastBaseline + LINE_HEIGHT + PARAGRAPH_GAP + textPaint.ascent()).toInt().coerceAtLeast(1)
+        val height = (lastBaseline + textPaint.descent() + PAGE_FOOT_BLANK).toInt().coerceAtLeast(1)
         val bitmap = Bitmap.createBitmap(WIDTH, height, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
         canvas.drawColor(if (dark) DARK_BACKGROUND else LIGHT_BACKGROUND)
@@ -85,24 +86,6 @@ class NovelTextInterceptor(private val preferences: SharedPreferences) : Interce
         }
 
         return bitmap
-    }
-
-    // Set through AppCompatDelegate; its getter is shrunk away in release builds, so read the field.
-    private fun appCompatDarkTheme(): Boolean? = runCatching {
-        val field = Class.forName("androidx.appcompat.app.AppCompatDelegate")
-            .getDeclaredField("sDefaultNightMode")
-            .apply { isAccessible = true }
-        when (field.getInt(null)) {
-            APP_NIGHT_NO -> false
-            APP_NIGHT_YES -> true
-            else -> null
-        }
-    }.getOrNull()
-
-    /** The system's night mode, the fallback when the app's own theme cannot be read. */
-    private fun systemDarkTheme(): Boolean {
-        val uiMode = applicationContext.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK
-        return uiMode == Configuration.UI_MODE_NIGHT_YES
     }
 
     /** Distance between the first and the last baseline of a paragraph. */
@@ -152,9 +135,9 @@ class NovelTextInterceptor(private val preferences: SharedPreferences) : Interce
     companion object {
         private const val HOST = "hikarinagi-novel-text"
 
-        private const val WIDTH = 1000
+        internal const val WIDTH = 1000
         private const val X_PADDING = 60f
-        private const val CONTENT_WIDTH = (WIDTH - 2 * X_PADDING).toInt()
+        internal const val CONTENT_WIDTH = (WIDTH - 2 * X_PADDING).toInt()
         private const val BODY_SIZE = 40f
         private const val HEADING_SIZE = 56f
         private const val LINE_SPACING_MULT = 1.5f
@@ -163,8 +146,8 @@ class NovelTextInterceptor(private val preferences: SharedPreferences) : Interce
         /** Extra space between two paragraphs, on top of one line spacing. */
         private const val PARAGRAPH_GAP = 25
 
-        /** Space above the heading. */
-        private const val TOP_MARGIN = 60
+        /** Space above a chapter's first page, text or illustration. */
+        internal const val TOP_MARGIN = 60
 
         /** Space between the heading, the divider and the first line of text. */
         private const val HEADING_GAP = 48
@@ -175,6 +158,30 @@ class NovelTextInterceptor(private val preferences: SharedPreferences) : Interce
         private const val LIGHT_TEXT = Color.BLACK
         private const val DARK_BACKGROUND = Color.BLACK
         private const val DARK_TEXT = Color.WHITE
+
+        /** The colour every page is drawn on, text and illustration alike. */
+        internal fun background(preferences: SharedPreferences): Int = if (isDark(preferences)) DARK_BACKGROUND else LIGHT_BACKGROUND
+
+        /** Whether the reader asked for dark pages, or left it to the app and the system. */
+        internal fun isDark(preferences: SharedPreferences): Boolean = Preferences.isDark(preferences, appCompatDarkTheme(), systemDarkTheme())
+
+        // Set through AppCompatDelegate; its getter is shrunk away in release builds, so read the field.
+        private fun appCompatDarkTheme(): Boolean? = runCatching {
+            val field = Class.forName("androidx.appcompat.app.AppCompatDelegate")
+                .getDeclaredField("sDefaultNightMode")
+                .apply { isAccessible = true }
+            when (field.getInt(null)) {
+                APP_NIGHT_NO -> false
+                APP_NIGHT_YES -> true
+                else -> null
+            }
+        }.getOrNull()
+
+        /** The system's night mode, the fallback when the app's own theme cannot be read. */
+        private fun systemDarkTheme(): Boolean {
+            val uiMode = applicationContext.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK
+            return uiMode == Configuration.UI_MODE_NIGHT_YES
+        }
 
         /** A middle grey reads on white paper and on a black screen alike. */
         private const val DIVIDER_COLOR = "#9E9E9E"
@@ -206,6 +213,9 @@ class NovelTextInterceptor(private val preferences: SharedPreferences) : Interce
         }
 
         private val LINE_HEIGHT = ((bodyPaint.descent() - bodyPaint.ascent()) * LINE_SPACING_MULT + LINE_SPACING_EXTRA).toInt()
+
+        /** The blank a text page keeps below its last line; an illustration page keeps the same one. */
+        internal val PAGE_FOOT_BLANK = (LINE_HEIGHT + PARAGRAPH_GAP + bodyPaint.ascent() - bodyPaint.descent()).roundToInt()
 
         fun createUrl(title: String, text: String, topPadding: Boolean = false): String = "http://$HOST/${Uri.encode(title)}/${Uri.encode(text)}" + if (topPadding) "?top=1" else ""
 

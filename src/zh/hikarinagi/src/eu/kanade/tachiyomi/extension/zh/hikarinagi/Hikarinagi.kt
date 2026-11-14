@@ -57,7 +57,7 @@ abstract class Hikarinagi :
 
     override val client = super.client.newBuilder()
         .addInterceptor(NovelTextInterceptor(preferences))
-        .addInterceptor(NovelImageInterceptor())
+        .addInterceptor(NovelImageInterceptor(preferences))
         .addInterceptor(ImageInterceptor())
         .build()
 
@@ -65,7 +65,7 @@ abstract class Hikarinagi :
         const val IMAGE_BASR_URL = "https://imagesp.yurari.moe"
 
         /** Must match the light novel source's name in `build.gradle.kts`. */
-        const val NOVEL_SOURCE_NAME = "Hikarinagi Novels"
+        const val NOVEL_SOURCE_NAME = "Hikarinagi Novel"
 
         /** Also read by [ImageInterceptor], which reports the same login problem. */
         internal const val LOGIN_MESSAGE = "请先在 WebView 中登录"
@@ -250,9 +250,11 @@ abstract class Hikarinagi :
                 when (block) {
                     is EpubBlock.Image -> {
                         flushText()
-                        val url = NovelImageInterceptor.save(block.bytes, block.path.substringAfterLast('.', "jpg"))
+                        val url = NovelImageInterceptor.save(block.bytes, block.path.substringAfterLast('.', "jpg"), topPadding)
                         pages.add(Page(pages.size, imageUrl = url))
-                        topPadding = true
+                        // Only the chapter's first page keeps breathing room above it; from here on the
+                        // illustration's own margins separate the pages.
+                        topPadding = false
                     }
 
                     is EpubBlock.Text -> paragraphs.addAll(block.text.splitParagraph())
