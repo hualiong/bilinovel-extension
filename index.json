@@ -2,10 +2,10 @@
   {
     "name": "Tachiyomi: BiliNovel",
     "pkg": "eu.kanade.tachiyomi.extension.zh.bilinovel",
-    "apk": "tachiyomi-zh.bilinovel-v1.6.27.apk",
+    "apk": "tachiyomi-zh.bilinovel-v1.6.28.apk",
     "lang": "zh",
-    "code": 106027,
-    "version": "1.6.27",
+    "code": 106028,
+    "version": "1.6.28",
     "nsfw": 0,
     "sources": [
       {
@@ -13,6 +13,12 @@
         "lang": "zh",
         "name": "哔哩轻小说",
         "baseUrl": "https://www.bilinovel.com"
+      },
+      {
+        "id": "6275431490399941640",
+        "lang": "zh",
+        "name": "哔哩轻小说（APP）",
+        "baseUrl": "https://www.bilinovel.net"
       }
     ]
   },
