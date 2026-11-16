@@ -80,8 +80,19 @@ abstract class BiliNovel :
 
     internal val textInterceptor = TextInterceptor(super.client, headers, pref)
 
-    /** The case ids of the books already in the official client's shelf, so they are looked up once. */
-    private val bookcaseIds = ConcurrentHashMap<Int, Int>()
+    /**
+     * The account's shelf as article id to case id, read from the site in one request and held in
+     * memory only: whether a book is already shelved becomes a lookup rather than a question asked
+     * of every book. Null until it has been read, and left null once reading it keeps failing.
+     */
+    @Volatile
+    private var shelf: MutableMap<Int, Int>? = null
+
+    @Volatile
+    private var shelfFailures = 0
+
+    /** Case ids learned one book at a time, so the fallback path still asks about each book once. */
+    private val checkedCaseIds = ConcurrentHashMap<Int, Int>()
 
     /** The login item, so its summary can follow the session once the silent re-login settles. */
     private var loginPref: androidx.preference.Preference? = null
@@ -96,7 +107,9 @@ abstract class BiliNovel :
     /** A credential edit takes effect at once: the old session and its shelf cache go, a complete new pair logs in right away. */
     internal fun onCredentialsChanged() {
         clearToken()
-        bookcaseIds.clear()
+        shelf = null
+        shelfFailures = 0
+        checkedCaseIds.clear()
         loginError = null
         if (!hasCredentials()) {
             toast("已退出登录")
@@ -223,30 +236,33 @@ abstract class BiliNovel :
     override suspend fun getPageList(chapter: SChapter): List<Page> {
         if (isWebMode) return web.pages(chapter)
         val (articleId, chapterId) = chapter.ids
-        val data = apiPost(
-            "novel/getNovelText",
-            query = mapOf("articleid" to articleId, "chapterid" to chapterId),
-            restricted = true,
-        ).data()
-        val switch = pref.getBoolean(PREF_DISPLAY_TRADITIONAL, false)
+        val data = chapterData(articleId, chapterId)
         val key = "$articleId-$chapterId"
-        val text = chapterText(
-            data.str("text").convert(switch),
-            data.arr("images")?.objects()?.map { it.str("path") } ?: emptyList(),
-            data.optBoolean("isImage"),
-            baseUrl,
-        )
-        val entries = textInterceptor.prepare(key, data.str("chaptername").convert(switch), text)
+        val entries = textInterceptor.prepare(key, data.str("chaptername").convert(traditional), inlineText(data))
         val articleName = runCatching { chapter.memo.getString("title") }.getOrNull()
         syncReadingProgress(articleId.toInt(), chapterId.toInt(), data.str("chaptername"), articleName)
-        // An illustration page keeps its own URL: Mihon requests it, and the interceptor frames
-        // the response with the reading margins.
-        return List(entries.size) { i ->
-            Page(i, entries[i]?.let { url -> "$url#${TextInterceptor.FRAME}" } ?: textInterceptor.pageUrl(key, i))
-        }
+        // Every page is its own URL: an illustration keeps the site's, a drawn page carries its text.
+        return entries.mapIndexed { i, url -> Page(i, url) }
     }
 
     override suspend fun getImageUrl(page: Page): String = if (isWebMode) web.image(page) else page.url
+
+    /** Whether the reader wants the site's traditional characters kept as they are. */
+    private val traditional get() = pref.getBoolean(PREF_DISPLAY_TRADITIONAL, false)
+
+    private suspend fun chapterData(articleId: String, chapterId: String): JSONObject = apiPost(
+        "novel/getNovelText",
+        query = mapOf("articleid" to articleId, "chapterid" to chapterId),
+        restricted = true,
+    ).data()
+
+    /** The chapter body as the renderer takes it, its illustrations inlined between paragraphs. */
+    private fun inlineText(data: JSONObject) = chapterText(
+        data.str("text").convert(traditional),
+        data.arr("images")?.objects()?.map { it.str("path") } ?: emptyList(),
+        data.optBoolean("isImage"),
+        baseUrl,
+    )
 
     // Popular
 
@@ -321,48 +337,87 @@ abstract class BiliNovel :
         ).bookPage()
     }
 
+    /**
+     * The whole shelf in one request. Null when it cannot be read, which sends the sync back to
+     * asking about one book at a time; a shelf that will not answer is not asked again and again.
+     */
+    private suspend fun shelfCaseIds(): MutableMap<Int, Int>? {
+        shelf?.let { return it }
+        if (shelfFailures >= MAX_SHELF_FAILURES) return null
+        val loaded = runCatching {
+            apiPost(
+                "bookcase/list",
+                JSONObject().put("classid", -1).put("sortorder", "lastupdate"),
+                retryLogin = false,
+            ).dataArray().objects().mapNotNull { item ->
+                item.int("caseid").takeIf { it > 0 }?.let { item.int("articleid") to it }
+            }
+        }.getOrElse {
+            shelfFailures++
+            return null
+        }
+        shelfFailures = 0
+        return ConcurrentHashMap<Int, Int>().apply { putAll(loaded) }.also { shelf = it }
+    }
+
+    /** The per-book question the shelf used to be read with, kept for when the whole shelf fails. */
+    private suspend fun checkedCaseId(articleId: Int): Int? {
+        val check = apiPost(
+            "bookcase/check",
+            JSONObject().put("articleid", articleId),
+            retryLogin = false,
+        ).data()
+        if (!check.optBoolean("inBookcase")) return null
+        return check.optJSONObject("bookcase")?.optInt("caseid")?.takeIf { it > 0 }
+    }
+
     /** Mirrors the web bookmark: records the chapter as read in the official client's shelf. */
     private suspend fun syncReadingProgress(articleId: Int, chapterId: Int, chapterName: String, articleName: String?) {
         if (!pref.getBoolean(PREF_AUTO_BOOKMARK, false)) return
         CoroutineScope(Dispatchers.IO).launch {
             runCatching {
                 if (clientToken() == null) return@runCatching
-                var caseId = bookcaseIds[articleId]
-                if (caseId == null) {
-                    val check = apiPost(
-                        "bookcase/check",
-                        JSONObject().put("articleid", articleId),
-                        retryLogin = false,
-                    ).data()
-                    if (!check.optBoolean("inBookcase")) {
-                        // The web bookmark added the book when it was missing; the client does the same.
-                        articleName?.takeIf(String::isNotBlank)?.let {
-                            apiPost(
-                                "bookcase/add",
-                                JSONObject()
-                                    .put("articleid", articleId)
-                                    .put("articlename", it)
-                                    .put("classid", 0)
-                                    .put("chapterid", chapterId)
-                                    .put("chaptername", chapterName)
-                                    .put("pageid", 1),
-                            )
-                        }
-                        return@runCatching
+                val known = shelfCaseIds()
+                // A shelf read at once lists every book on it, so a miss is a new book and costs no
+                // request; only when the shelf cannot be read is each book asked about on its own.
+                val caseId = if (known != null) {
+                    known[articleId]
+                } else {
+                    checkedCaseIds[articleId] ?: checkedCaseId(articleId)?.also { checkedCaseIds[articleId] = it }
+                }
+                if (caseId != null) {
+                    try {
+                        apiPost(
+                            "bookcase/updateProgress",
+                            JSONObject()
+                                .put("caseid", caseId)
+                                .put("chapterid", chapterId)
+                                .put("chaptername", chapterName)
+                                .put("pageid", 1),
+                        )
+                    } catch (t: Throwable) {
+                        // A case id the site no longer accepts is the only way a stale cache shows itself.
+                        shelf = null
+                        checkedCaseIds.clear()
+                        throw t
                     }
-                    caseId = check.optJSONObject("bookcase")?.optInt("caseid")?.takeIf { it > 0 }
-                    caseId?.let { bookcaseIds[articleId] = it }
+                    return@runCatching
                 }
-                caseId?.let {
-                    apiPost(
-                        "bookcase/updateProgress",
-                        JSONObject()
-                            .put("caseid", it)
-                            .put("chapterid", chapterId)
-                            .put("chaptername", chapterName)
-                            .put("pageid", 1),
-                    )
-                }
+                // Shelving a book is its own choice, so a book the reader never added is left alone.
+                if (!pref.getBoolean(PREF_AUTO_ADD_BOOKCASE, false)) return@runCatching
+                val name = articleName?.takeIf(String::isNotBlank) ?: return@runCatching
+                apiPost(
+                    "bookcase/add",
+                    JSONObject()
+                        .put("articleid", articleId)
+                        .put("articlename", name)
+                        .put("classid", 0)
+                        .put("chapterid", chapterId)
+                        .put("chaptername", chapterName)
+                        .put("pageid", 1),
+                )
+                // The add answers no case id, so the one lookup a new book needs is spent right here.
+                checkedCaseId(articleId)?.let { found -> (known ?: checkedCaseIds)[articleId] = found }
             }.onFailure { Log.e("BiliNovel", "同步阅读进度失败: ${it.message}") }
         }
     }
@@ -382,7 +437,10 @@ abstract class BiliNovel :
         internal const val API_HOST = "api.readpai.com"
         private const val MOBILE_UA =
             "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
-        private val CLIENT_ONLY_PREFS = setOf(PREF_ACCOUNT, PREF_PASSWORD)
+
+        // The web bookmark is one request that both shelves the book and updates it, so only the
+        // client can offer the two halves separately.
+        private val CLIENT_ONLY_PREFS = setOf(PREF_ACCOUNT, PREF_PASSWORD, PREF_AUTO_ADD_BOOKCASE)
 
         // The strict image preload only concerns the web reader; the client fetches per page.
         private val WEB_ONLY_PREFS = setOf(PREF_LOAD_ALL_IMAGES)
@@ -390,6 +448,9 @@ abstract class BiliNovel :
         private const val DEFAULT_POPULAR = "/top/weekvisit/%d.html"
         private const val NEW_BOOK_SUFFIX = "/top/newhot/%d.html"
         private const val LAST_UPDATE_RANKING = 7
+
+        /** Shelf reads allowed to fail in a row before the sync stops asking for the whole shelf. */
+        private const val MAX_SHELF_FAILURES = 3
 
         /** Ranking type and period of every choice in the "热门显示内容" setting. */
         private val POPULAR_RANKINGS = mapOf(

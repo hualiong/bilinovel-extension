@@ -30,6 +30,9 @@ const val PREF_RATE_LIMIT = "RATE_LIMIT"
 const val PREF_ACCOUNT = "ACCOUNT"
 const val PREF_PASSWORD = "PASSWORD"
 const val PREF_AUTO_BOOKMARK = "AUTO_BOOKMARK"
+
+/** Derived from [PREF_AUTO_BOOKMARK]: shown and asked only while that one is on. */
+const val PREF_AUTO_ADD_BOOKCASE = "AUTO_ADD_BOOKCASE"
 const val PREF_LOAD_ALL_IMAGES = "LOAD_ALL_IMAGES"
 
 /** Machine state, never shown on the screen: the version pair learned from the official app. */
@@ -47,6 +50,7 @@ val SHARED_PREF_KEYS = setOf(
     PREF_ACCOUNT,
     PREF_PASSWORD,
     PREF_AUTO_BOOKMARK,
+    PREF_AUTO_ADD_BOOKCASE,
     PREF_LOAD_ALL_IMAGES,
 )
 
@@ -279,6 +283,40 @@ fun preferencesInternal(context: Context, pref: SharedPreferences, onCredentials
             true
         }
     }
+
+    /** Only the books already on the source's shelf are touched; shelving a new one is the choice below. */
+    val autoBookmark = SwitchPreferenceCompat(context).apply {
+        key = PREF_AUTO_BOOKMARK
+        title = "自动同步阅读进度（需登录）"
+        summary = "阅读章节时自动同步源站书架上已有作品的阅读进度"
+        setEnabled(isLoggedIn)
+        setDefaultValue(false)
+    }
+
+    /**
+     * The other half of the old switch: a book the reader never shelved is only put on the shelf
+     * when this is on. It means nothing while the sync above is off, so it is hidden then and
+     * shown the moment the sync is switched on.
+     */
+    val autoAddBookcase = SwitchPreferenceCompat(context).apply {
+        key = PREF_AUTO_ADD_BOOKCASE
+        title = "将新书自动加入书架"
+        summary = "阅读不在源站书架上的作品时，先把它加进书架"
+        setEnabled(isLoggedIn)
+        setDefaultValue(false)
+        // setVisible, not isVisible: the compile stub carries the setter and no getter.
+        setVisible(pref.getBoolean(PREF_AUTO_BOOKMARK, false))
+        setOnPreferenceChangeListener { _, newValue ->
+            pref.mirror(key, newValue)
+            true
+        }
+    }
+    autoBookmark.setOnPreferenceChangeListener { _, newValue ->
+        autoAddBookcase.setVisible(newValue as Boolean)
+        pref.mirror(autoBookmark.key, newValue)
+        true
+    }
+
     lateinit var login: Preference
     login = plainPreference(context).apply {
         key = PREF_ACCOUNT
@@ -393,17 +431,8 @@ fun preferencesInternal(context: Context, pref: SharedPreferences, onCredentials
             }
         },
         loadAllImages,
-        SwitchPreferenceCompat(context).apply {
-            key = PREF_AUTO_BOOKMARK
-            title = "自动同步阅读进度（需登录）"
-            summary = "阅读章节时自动同步到源站书架的阅读进度"
-            setEnabled(isLoggedIn)
-            setDefaultValue(false)
-            setOnPreferenceChangeListener { _, newValue ->
-                pref.mirror(key, newValue)
-                true
-            }
-        },
+        autoBookmark,
+        autoAddBookcase,
         SwitchPreferenceCompat(context).apply {
             key = PREF_DISPLAY_TRADITIONAL
             title = "显示繁体"

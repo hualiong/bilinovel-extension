@@ -13,6 +13,7 @@ import android.text.Html
 import android.text.Layout
 import android.text.StaticLayout
 import android.text.TextPaint
+import android.util.Base64
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.network.awaitSuccess
 import keiyoushi.utils.applicationContext
@@ -44,96 +45,96 @@ class TextInterceptor(
     private val headers: Headers,
     private val pref: SharedPreferences,
 ) : Interceptor {
-    /**
-     * The chapters laid out and ready to be drawn, oldest dropped first.
-     *
-     * Per source instance on purpose: the web reader's keys carry a -web- suffix
-     * ("article-chapter-web-page") and the client's do not, so the two never name the same
-     * render. Sharing these maps would one day let a renamed key collide across sources.
-     */
-    private val chapters = LinkedHashMap<String, Render>()
 
     override fun intercept(chain: Interceptor.Chain): Response {
         val request = chain.request()
         val url = request.url
         if (url.host != HOST) {
             // An illustration page Mihon requested by its own URL: frame its response, and remember.
-            if (url.fragment != FRAME) return chain.proceed(request)
+            val parts = url.fragment?.split('/')
+            if (parts?.firstOrNull() != FRAME) return chain.proceed(request)
             val plain = request.newBuilder().url(url.newBuilder().fragment(null).build()).build()
-            val frameName = "frame/${canvasStamp()}/${plain.url}"
-            pagesCache[frameName]?.let { return Response.Builder().request(request).ok(png(it)) }
+            val image = plain.url.toString()
+            // A chapter that opens on this picture puts its title in the fragment, so the framed page
+            // carries the title without this class keeping anything about the chapter.
+            val title = parts.getOrNull(2)?.takeIf(String::isNotEmpty)?.decode()
+            val titled = title?.let { Render("", it, "", split = true) }
+            val frameName = "frame/${canvasStamp()}/${if (titled == null) "bare" else "titled"}/$image"
+            pagesCache[frameName]?.let { return Response.Builder().request(request).ok(it) }
             val response = chain.proceed(plain)
             if (!response.isSuccessful) return response
-            val framed = frame(response)
-            cache(frameName, framed)
-            return Response.Builder().request(request).ok(png(framed))
+            val bytes = png(frame(response, titled))
+            cache(frameName, bytes)
+            return Response.Builder().request(request).ok(bytes)
         }
 
-        val key = url.pathSegments.getOrNull(0).orEmpty()
-        val index = url.pathSegments.getOrNull(1)?.toIntOrNull()
-            ?: throw IOException("页面已失效，请刷新本章节")
-        val render = synchronized(chapters) { chapters[key] }
-            ?: throw IOException("页面已失效，请刷新本章节")
-        // The render's stamp rides in the name, so a settings change never serves a stale bitmap.
-        val name = "$key/$index/${render.stamp}"
-        val page = pagesCache[name] ?: render.drawPage(index).also { cache(name, it) }
+        val path = url.pathSegments
+        // A drawn page carries its own text, so it renders without anything kept from [prepare].
+        if (path.getOrNull(0) == PAYLOAD) {
+            val page = path.getOrNull(1) ?: throw IOException("页面已失效，请刷新本章节")
+            return Response.Builder().request(request).ok(payload(page, url.queryParameter("k")?.decode().orEmpty()))
+        }
 
-        return Response.Builder().request(request).ok(png(page))
+        // Anything else is a page list from an older version: it carries no text, so it cannot be drawn.
+        throw IOException("页面已失效，请刷新本章节")
     }
 
     /** The canvas colours every drawn page and every framed illustration ride on. */
     private fun canvasStamp() = "${isDark(pref, appDarkTheme(), systemDarkTheme())}/${pref.getString(PREF_SCREEN_STYLE, DEFAULT_SCREEN_STYLE)}"
 
-    private fun png(bitmap: Bitmap): okhttp3.ResponseBody {
+    /** The page as the reader receives it; the encoded form is all that is kept around afterwards. */
+    private fun png(bitmap: Bitmap): ByteArray {
         val data = ByteArrayOutputStream()
         bitmap.compress(Bitmap.CompressFormat.PNG, 100, data)
-        return data.toByteArray().toResponseBody(IMAGE_PNG)
+        return data.toByteArray()
     }
 
     /**
-     * Lays the chapter out and returns one entry per page: null is drawn here when the reader
-     * asks for it; a URL is an illustration the reader requests itself, which this interceptor
-     * then frames. An unread page, and the illustration on it, costs nothing.
+     * Lays the chapter out and returns one URL per page: an illustration keeps its own address, a
+     * drawn page carries the text it has to draw. Nothing is remembered, so any page stays
+     * renderable after a restart, a stale page list or an evicted image.
      */
-    fun prepare(key: String, title: String, text: String, split: Boolean = true): List<String?> {
-        // Chapter images are only useful while their chapter is being read.
-        imageCache.keys.removeIf { it != key }
-        val render = Render(key, title, text, split)
-        synchronized(chapters) {
-            chapters[key] = render
-            while (chapters.size > MAX_CHAPTERS) {
-                chapters.remove(chapters.keys.first())
-            }
-        }
-        return render.entries
+    fun prepare(key: String, title: String, text: String): List<String> {
+        val render = Render(key, title, text)
+        return render.entries.mapIndexed(render::url)
     }
 
-    /** The URL the reader asks for; [prepare] must have run for [key] first. */
-    fun pageUrl(key: String, index: Int) = "http://$HOST/$key/$index"
+    /**
+     * The URL of a page drawn from [text]. A web page goes through this directly: its illustrations
+     * cannot be pages of their own, so they are fetched together and baked in when it is drawn.
+     */
+    fun payloadUrl(key: String, title: String, text: String) = "http://$HOST/$PAYLOAD/${title.encode()}.${text.encode()}?v=$RENDER_VERSION&k=${key.encode()}"
+
+    /** Draws a page from the text its URL carries; [key] only names it for the image cache. */
+    private fun payload(page: String, key: String): ByteArray {
+        val (title, text) = page.split('.', limit = 2).let { (t, body) -> t.decode() to body.decode() }
+        // A URL always carries one whole page, so it is never paginated again: a web page may bake
+        // its illustrations in, and a client page holds text only (its illustrations are pages).
+        val render = Render(key, title, text, split = false)
+        // A page that still needs a second one has nowhere to continue: it would lose its tail.
+        if (render.pageCount > 1) throw IOException("本章页面过长，无法生成图片")
+        val name = "p/${canvasStamp()}/$page"
+        return pagesCache[name] ?: png(render.drawPage(0)).also { cache(name, it) }
+    }
 
     /**
-     * Keeps the page images the reader is opening, dropping another one once the cache is full.
-     *
-     * A dropped bitmap is only forgotten, never recycled: the reader may still be compressing the
-     * very same image on another thread.
+     * Keeps the page the reader is opening in the very form it was sent: the PNG it decodes anyway.
+     * A decoded page is four bytes a pixel (9 MB for a full one) while the same page encodes to a
+     * few hundred kB, and serving that again needs neither a redraw nor a re-encode.
      */
-    private fun cache(name: String, bitmap: Bitmap) = synchronized(pagesCache) {
-        pagesCache[name] = bitmap
-        cachedPixels += bitmap.width.toLong() * bitmap.height
-        while (pagesCache.size > MAX_CACHED_PAGES || cachedPixels > MAX_CACHED_PIXELS) {
-            val dropped = pagesCache.entries.firstOrNull { it.value !== bitmap } ?: break
-            cachedPixels -= dropped.value.width.toLong() * dropped.value.height
+    private fun cache(name: String, bytes: ByteArray) = synchronized(pagesCache) {
+        pagesCache[name] = bytes
+        cachedBytes += bytes.size
+        while (pagesCache.size > MAX_CACHED_PAGES || cachedBytes > MAX_CACHED_BYTES) {
+            val dropped = pagesCache.entries.firstOrNull { it.value !== bytes } ?: break
+            cachedBytes -= dropped.value.size
             pagesCache.remove(dropped.key)
         }
     }
 
-    private inner class Render(private val key: String, title: String, text: String, private val split: Boolean) {
+    private inner class Render(private val key: String, title: String, text: String, private val split: Boolean = true) {
         private val dark = isDark(pref, appDarkTheme(), systemDarkTheme())
         private val readStyle = pref.getString(PREF_SCREEN_STYLE, DEFAULT_SCREEN_STYLE)!!.split(' ')
-
-        /** Everything that can change pixels, so one stamp covers every stale-page path. */
-        val stamp = canvasStamp() +
-            "/${pref.getBoolean(PREF_DISPLAY_TRADITIONAL, false)}/${pref.getBoolean(PREF_LOAD_ALL_IMAGES, false)}"
 
         private val background = if (dark) Color.BLACK else Color.parseColor(readStyle[0])
         private val textColor = if (dark) Color.WHITE else Color.parseColor(readStyle[1])
@@ -193,9 +194,8 @@ class TextInterceptor(
         private val paragraphGap = pageBottomGap
 
         /** The title, centred above the body and taken from the chapter's own markup. */
-        private val heading = title.trim()
-            .takeIf(String::isNotEmpty)
-            ?.let { headingLayout(plainText(it)) }
+        private val headingText = title.trim().takeIf(String::isNotEmpty)?.let(::plainText)
+        private val heading = headingText?.let(::headingLayout)
         private val headingBlock = heading?.let { it.height + 2 * HEADING_GAP + DIVIDER_HEIGHT } ?: 0
 
         private val parsed = parse(text)
@@ -212,11 +212,66 @@ class TextInterceptor(
         val entries: List<String?>
         private val pages: List<List<Panel>?>
 
+        /**
+         * The illustration the chapter opens with, when a client chapter hands it a page of its own.
+         * The title rides that framed image instead of a drawn page, because this renderer never
+         * gets to touch page 0 — and the room the heading's divider keeps is the very clearance a
+         * drawn page leaves above its body, so the image starts exactly where text would.
+         */
+        val headingImage: String? = if (split && heading != null) {
+            val first = parsed.firstOrNull {
+                when (it) {
+                    is Block.Image -> it.url.isNotBlank()
+                    is Block.Text -> it.text.isNotBlank()
+                }
+            }
+            (first as? Block.Image)?.url
+        } else {
+            null
+        }
+
+        /** The room the title and its divider take above an illustration. */
+        val imageHeader get() = if (heading == null) 0 else TOP_MARGIN + headingBlock
+
+        /** The URL of one page: its own address for an illustration, its own text for a drawn page. */
+        fun url(index: Int, image: String?): String {
+            val title = headingText?.takeIf { index == titlePage }
+            return if (image != null) {
+                "$image#$FRAME/$RENDER_VERSION" + (title?.let { "/${it.encode()}" } ?: "")
+            } else {
+                val text = pages[index].orEmpty().joinToString("\n") {
+                    when (it) {
+                        is Panel.Paragraphs -> it.text
+                        is Panel.Figure -> "$IMAGE_MARKER${it.url}$IMAGE_MARKER"
+                    }
+                }
+                payloadUrl(key, title ?: "", text)
+            }
+        }
+
+        /** The drawn page carrying the title, or none when [headingImage] carries it. */
+        private val headingPage: Int
+
         init {
             val (entries, pages) = paginate()
             this.entries = entries
             this.pages = pages
+            this.headingPage = if (headingImage != null) -1 else pages.indexOfFirst { it != null }
         }
+
+        /**
+         * Draws the title and its divider at the head of a framed illustration, leaving the image
+         * exactly where a drawn page would have started its body.
+         */
+        fun drawHeading(canvas: Canvas) {
+            val layout = heading ?: return
+            layout.draw(canvas, X_PADDING, TOP_MARGIN.toFloat())
+            val dividerY = (TOP_MARGIN + layout.height + HEADING_GAP).toFloat()
+            canvas.drawRect(X_PADDING, dividerY, WIDTH - X_PADDING, dividerY + DIVIDER_HEIGHT, dividerPaint)
+        }
+
+        /** The page the title rides on: the first drawn one, or the illustration the chapter opens on. */
+        private val titlePage = if (headingImage != null) 0 else headingPage
 
         val pageCount get() = entries.size
 
@@ -233,8 +288,9 @@ class TextInterceptor(
             val pages = mutableListOf<List<Panel>?>()
             var current = mutableListOf<Panel>()
             var height = 0
-            // The first page also carries the chapter heading above the body.
-            var limit = maxPageHeight - (if (heading != null) TOP_MARGIN + headingBlock else 0)
+            // The first page flushed below carries the chapter heading, unless the opening
+            // illustration does, in which case every drawn page starts out at full height.
+            var limit = maxPageHeight - (if (heading != null && headingImage == null) TOP_MARGIN + headingBlock else 0)
             fun flush() {
                 pages += current
                 entries += null
@@ -275,7 +331,7 @@ class TextInterceptor(
         fun drawPage(index: Int): Bitmap {
             val page = pages.getOrNull(index) ?: throw IOException("页面已失效，请刷新本章节")
             // A chapter opens with room above its heading; a continued page starts at once.
-            val first = index == 0
+            val first = index == headingPage
             val topMargin = if (first && heading != null) TOP_MARGIN else 0
             val header = if (first) headingBlock else 0
             val bodyHeight = page.mapIndexed { i, panel ->
@@ -388,7 +444,7 @@ class TextInterceptor(
         private fun paragraphPanel(paragraph: String): Panel.Paragraphs {
             val layout = bodyLayout(paragraph)
             val firstBaseline = -bodyPaint.ascent()
-            return Panel.Paragraphs(layout, firstBaseline, (firstBaseline + baselineSpan(layout) + bodyPaint.descent()).toInt())
+            return Panel.Paragraphs(paragraph, layout, firstBaseline, (firstBaseline + baselineSpan(layout) + bodyPaint.descent()).toInt())
         }
 
         /** Distance between the first and the last baseline of a paragraph. */
@@ -445,6 +501,8 @@ class TextInterceptor(
 
     /** Loads and scales every illustration of the chapter, once per render. */
     private fun loadImages(key: String, blocks: List<Block>): Map<String, Bitmap> {
+        // A page's illustrations are only useful while that page is being drawn.
+        imageCache.keys.removeIf { it != key }
         val urls = blocks.filterIsInstance<Block.Image>().map { it.url }.filter(String::isNotBlank).distinct()
         if (urls.isEmpty()) return emptyMap()
 
@@ -503,34 +561,39 @@ class TextInterceptor(
         return bitmap
     }
 
-    /** Decodes one fetched illustration and frames it with the reading margins. */
-    private fun frame(response: Response): Bitmap {
+    /**
+     * Decodes one fetched illustration and frames it with the reading margins. A [titled] chapter
+     * opens on this picture, so its title and divider go above it and the image drops by that much.
+     */
+    private fun frame(response: Response, titled: Render?): Bitmap {
         val source = response.body.byteStream().use(BitmapFactory::decodeStream)
             ?: throw IOException("插图解码失败")
         val bottom = X_PADDING.toInt()
-        val bitmap = scaled(source, MAX_PAGE_HEIGHT - bottom)
-        val page = Bitmap.createBitmap(WIDTH, bitmap.height + bottom, Bitmap.Config.ARGB_8888)
+        val header = titled?.imageHeader ?: 0
+        val bitmap = scaled(source, MAX_PAGE_HEIGHT - bottom - header)
+        val page = Bitmap.createBitmap(WIDTH, header + bitmap.height + bottom, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(page)
         val dark = isDark(pref, appDarkTheme(), systemDarkTheme())
         canvas.drawColor(if (dark) Color.BLACK else Color.parseColor(pref.getString(PREF_SCREEN_STYLE, DEFAULT_SCREEN_STYLE)!!.split(' ')[0]))
-        canvas.drawBitmap(bitmap, (WIDTH - bitmap.width) / 2f, 0f, null)
+        titled?.drawHeading(canvas)
+        canvas.drawBitmap(bitmap, (WIDTH - bitmap.width) / 2f, header.toFloat(), null)
         return page
     }
 
     /** The images a chapter keeps between renders, for the strict "load all images" retry. */
     private val imageCache by lazy { ConcurrentHashMap<String, HashMap<String, Bitmap>>() }
 
-    /** The page images the reader is opening; a full cache drops one to make room. */
-    private val pagesCache = ConcurrentHashMap<String, Bitmap>()
+    /** The encoded pages the reader is opening, keyed by what they were drawn from. */
+    private val pagesCache = ConcurrentHashMap<String, ByteArray>()
 
-    /** How much of the rendered pages is held on to, so a page can be opened again. */
-    private var cachedPixels = 0L
+    /** How many bytes of them are held on to, so a page can be opened again. */
+    private var cachedBytes = 0
 
     /** The 200 a rendered page is served with. */
-    private fun Response.Builder.ok(body: okhttp3.ResponseBody): Response = code(200)
+    private fun Response.Builder.ok(bytes: ByteArray): Response = code(200)
         .message("OK")
         .protocol(Protocol.HTTP_1_1)
-        .body(body)
+        .body(bytes.toResponseBody(IMAGE_PNG))
         .build()
 
     /** Draws a layout at an offset, from the top of its block rather than its first baseline. */
@@ -562,6 +625,12 @@ class TextInterceptor(
     companion object {
         private const val HOST = "bilinovel-interceptor"
 
+        /** The path a drawn page's own text travels in. */
+        private const val PAYLOAD = "p"
+
+        /** Bump when a drawn pixel changes: it keeps cached page images from outliving the code. */
+        private const val RENDER_VERSION = 2
+
         /** Marks an illustration URL whose response this interceptor frames with the page margins. */
         const val FRAME = "bilinovel-frame"
 
@@ -577,15 +646,12 @@ class TextInterceptor(
         private const val MAX_PAGE_HEIGHT = 2_400
 
         /**
-         * How many chapters stay laid out, so switching back and forth does not redo the work.
-         * Linear reading only needs the previous and the current chapter; each laid-out chapter
-         * also keeps its scaled illustrations (~4 MB each), so this is a memory high-water mark.
+         * How many pages, and how many bytes of them, stay ready to be served again. Encoded a page
+         * is a few hundred kB instead of the 9 MB it decodes to, so this holds a chapter's worth of
+         * close pages; anything older is drawn again from the layout the chapter already keeps.
          */
-        private const val MAX_CHAPTERS = 2
-
-        /** How many rendered pages, and how many pixels of them, stay ready to be served again. */
-        private const val MAX_CACHED_PAGES = 12
-        private const val MAX_CACHED_PIXELS = 32_000_000L
+        private const val MAX_CACHED_PAGES = 32
+        private const val MAX_CACHED_BYTES = 8_000_000
 
         /**
          * A page is drawn as tall as its content, up to what a bitmap can hold. Android refuses
@@ -633,7 +699,7 @@ private sealed interface Panel {
      * A run of paragraphs, each laid out on its own. Every paragraph is given a line and the blank
      * line below it; a paragraph that wraps asks for one more line step per line it adds.
      */
-    class Paragraphs(val layout: StaticLayout, val firstBaseline: Float, override val height: Int) : Panel
+    class Paragraphs(val text: String, val layout: StaticLayout, val firstBaseline: Float, override val height: Int) : Panel
 
     class Figure(val url: String, override val height: Int) : Panel
 }
@@ -651,3 +717,8 @@ private const val LINE_SPACING_EXTRA = 6f
 
 /** Extra space between two lines of the same paragraph, and between two paragraphs. */
 private const val PARAGRAPH_GAP = 25
+
+/** A page carries its text in its URL: URL-safe base64 keeps it one path segment. */
+private fun String.encode() = Base64.encodeToString(toByteArray(), Base64.NO_WRAP or Base64.URL_SAFE)
+
+private fun String.decode() = String(Base64.decode(this, Base64.URL_SAFE), Charsets.UTF_8)

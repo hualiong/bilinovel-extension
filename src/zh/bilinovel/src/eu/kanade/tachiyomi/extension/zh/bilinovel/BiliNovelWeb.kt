@@ -126,9 +126,7 @@ internal class BiliNovelWeb(private val source: BiliNovel) {
         val content = doc.selectFirst("#acontent") ?: throw Exception("页面已失效，请刷新本章节")
         val switch = pref.getBoolean(PREF_DISPLAY_TRADITIONAL, false)
         val text = collectText(content, ids[1]!!.toInt(), ensureSalt(doc)).convert(switch)
-        val pages = textInterceptor.prepare(key, chapterTitle(doc).convert(switch), text, split = false)
-        if (pages.size > 1) throw Exception("本章页面过长，无法生成图片")
-        return textInterceptor.pageUrl(key, 0)
+        return textInterceptor.payloadUrl(key, chapterTitle(doc).convert(switch), text)
     }
 
     // Details and lists
