@@ -167,6 +167,16 @@ class TextInterceptor(
 
         private val bodySize = bodyPaint.textSize
 
+        /** The reading of a ruby: half the body text, bold, centred over the base it belongs to. */
+        private val rubyPaint = TextPaint(bodyPaint).apply {
+            textSize = bodySize * RUBY_SCALE
+            isFakeBoldText = true
+            textAlign = Paint.Align.CENTER
+        }
+
+        /** The room a reading takes above its line, which only the top of a page has to give. */
+        private val rubyHeadroom = bodySize * RUBY_HEADROOM_RATIO + rubyPaint.descent() - rubyPaint.ascent()
+
         /** What one line of text takes, and what a paragraph moves the next one down by. */
         private val lineHeight = ((bodyPaint.descent() - bodyPaint.ascent()) * LINE_SPACING_MULT + LINE_SPACING_EXTRA).toInt()
 
@@ -338,8 +348,13 @@ class TextInterceptor(
                 panel.height + if (i == 0) 0 else gapBetween(page[i - 1], panel)
             }.sum()
 
+            // A reading on the page's own first line has no blank above it to sit in.
+            val opensWithReading = topMargin + header == 0 &&
+                (page.firstOrNull() as? Panel.Paragraphs)?.rubies?.any { it.line == 0 } == true
+            val head = if (opensWithReading) rubyHeadroom.toInt() else 0
+
             // Whatever the page holds, it is one image; the reader scrolls it like any other page.
-            val height = (topMargin + header + bodyHeight + pageBottomGap).coerceAtLeast(1)
+            val height = (topMargin + header + head + bodyHeight + pageBottomGap).coerceAtLeast(1)
             if (height > MAX_BITMAP_HEIGHT) throw IOException("本章页面过长，无法生成图片（$height px）")
             val bitmap = Bitmap.createBitmap(WIDTH, height, Bitmap.Config.ARGB_8888)
             val canvas = Canvas(bitmap)
@@ -353,7 +368,7 @@ class TextInterceptor(
                 }
             }
 
-            var top = (topMargin + header).toFloat()
+            var top = (topMargin + header + head).toFloat()
             page.forEachIndexed { i, panel ->
                 if (i > 0) top += gapBetween(page[i - 1], panel)
                 draw(canvas, panel, top)
@@ -364,7 +379,7 @@ class TextInterceptor(
 
         private fun draw(canvas: Canvas, panel: Panel, top: Float) {
             when (panel) {
-                is Panel.Paragraphs -> drawWrapped(canvas, panel.layout, top + panel.firstBaseline)
+                is Panel.Paragraphs -> drawWrapped(canvas, panel, top)
 
                 is Panel.Figure -> {
                     val bitmap = images[panel.url]
@@ -382,18 +397,21 @@ class TextInterceptor(
 
         /**
          * Draws a [StaticLayout] line by line: the last line of a paragraph stays short, the
-         * others are widened to the text width.
+         * others are widened to the text width. A line that carries a reading is left as it is,
+         * so the reading stays over the very characters it annotates, and every reading is drawn
+         * last, above the line it marks.
          */
-        private fun drawWrapped(canvas: Canvas, layout: StaticLayout, firstBaseline: Float) {
-            val first = layout.getLineBaseline(0)
+        private fun drawWrapped(canvas: Canvas, panel: Panel.Paragraphs, top: Float) {
+            val layout = panel.layout
             val last = layout.lineCount - 1
+            val annotated = panel.rubies.mapTo(HashSet()) { it.line }
             for (line in 0..last) {
                 val text = layout.text.subSequence(layout.getLineStart(line), layout.getLineEnd(line))
                     .toString()
                     .trimEnd('\n')
                 if (text.isEmpty()) continue
 
-                val baseline = firstBaseline + (layout.getLineBaseline(line) - first)
+                val baseline = top + panel.baselines[line]
                 val mark = text.takeIf { it.length > 1 }?.last()?.takeIf { it in HANGING_MARKS }
                 val body = if (mark == null) text else text.dropLast(1)
                 var width = CONTENT_WIDTH
@@ -406,11 +424,17 @@ class TextInterceptor(
                     width = (markX - X_PADDING).toInt()
                 }
 
-                if (line == last || width <= 0 || !justify(canvas, body, baseline, width)) {
+                if (line in annotated || line == last || width <= 0 || !justify(canvas, body, baseline, width)) {
                     canvas.drawText(text, X_PADDING, baseline, bodyPaint)
                 } else if (mark != null) {
                     canvas.drawText(text, text.length - 1, text.length, markX, baseline, bodyPaint)
                 }
+            }
+
+            panel.rubies.forEach { ruby ->
+                val baseline = top + panel.baselines[ruby.line] + bodyPaint.ascent() -
+                    bodySize * RUBY_GAP_RATIO - rubyPaint.descent()
+                canvas.drawText(ruby.text, X_PADDING + (ruby.from + ruby.to) / 2f, baseline, rubyPaint)
             }
         }
 
@@ -442,13 +466,29 @@ class TextInterceptor(
         }
 
         private fun paragraphPanel(paragraph: String): Panel.Paragraphs {
-            val layout = bodyLayout(paragraph)
+            val (base, readings) = rubyRuns(paragraph)
+            val layout = bodyLayout(base)
             val firstBaseline = -bodyPaint.ascent()
-            return Panel.Paragraphs(paragraph, layout, firstBaseline, (firstBaseline + baselineSpan(layout) + bodyPaint.descent()).toInt())
+            val first = layout.getLineBaseline(0)
+            val rubies = readings.mapNotNull { reading ->
+                // bodyLayout prepends the paragraph indent, which shifts every offset by one.
+                val start = reading.start + 1
+                val end = reading.end + 1
+                if (start >= end || start >= layout.text.length) return@mapNotNull null
+                val line = layout.getLineForOffset(start)
+                DrawRuby(
+                    reading.text,
+                    line,
+                    layout.getPrimaryHorizontal(start),
+                    layout.getPrimaryHorizontal(end.coerceAtMost(layout.getLineEnd(line).coerceAtLeast(start))),
+                )
+            }
+            // A reading sits in the blank the line above already leaves, so a line keeps its height.
+            val baselines = FloatArray(layout.lineCount) { line ->
+                firstBaseline + (layout.getLineBaseline(line) - first)
+            }
+            return Panel.Paragraphs(paragraph, layout, baselines, rubies, (baselines.last() + bodyPaint.descent()).toInt())
         }
-
-        /** Distance between the first and the last baseline of a paragraph. */
-        private fun baselineSpan(layout: StaticLayout) = (layout.getLineBaseline(layout.lineCount - 1) - layout.getLineBaseline(0)).toFloat()
 
         /** The title, centred above the body and taken from the chapter's own markup. */
         private fun headingLayout(title: String) = StaticLayout.Builder
@@ -467,7 +507,7 @@ class TextInterceptor(
                 .build()
         }
 
-        private fun plainText(html: String) = Html.fromHtml(html, Html.FROM_HTML_MODE_LEGACY).toString()
+        private fun plainText(html: String) = Html.fromHtml(html.withoutReadings(), Html.FROM_HTML_MODE_LEGACY).toString()
     }
 
     /** Splits the rendered text into paragraphs and the illustrations between them. */
@@ -629,7 +669,7 @@ class TextInterceptor(
         private const val PAYLOAD = "p"
 
         /** Bump when a drawn pixel changes: it keeps cached page images from outliving the code. */
-        private const val RENDER_VERSION = 2
+        private const val RENDER_VERSION = 4
 
         /** Marks an illustration URL whose response this interceptor frames with the page margins. */
         const val FRAME = "bilinovel-frame"
@@ -691,18 +731,80 @@ class TextInterceptor(
     }
 }
 
+/**
+ * Splits a paragraph into the text the layout takes and the readings drawn above it. The
+ * markup is the `<ruby>base<rt>reading</rt></ruby>` the site and the app both write, the
+ * `<rp>` fallback included; a paragraph whose annotation is cut off keeps its text and loses
+ * the markup, so a broken reading never costs a paragraph.
+ */
+private fun rubyRuns(paragraph: String): Pair<String, List<Reading>> {
+    if (paragraph.indexOf('<') < 0) return paragraph to emptyList()
+    val text = StringBuilder()
+    val readings = mutableListOf<Reading>()
+    var index = 0
+    while (index < paragraph.length) {
+        val open = paragraph.indexOf("<ruby", index, ignoreCase = true)
+        if (open < 0) {
+            text.append(paragraph, index, paragraph.length)
+            break
+        }
+        val openEnd = paragraph.indexOf('>', open)
+        val close = if (openEnd < 0) -1 else paragraph.indexOf("</ruby", openEnd, ignoreCase = true)
+        val closeEnd = if (close < 0) -1 else paragraph.indexOf('>', close)
+        if (openEnd < 0 || close < 0 || closeEnd < 0) {
+            text.append(plainMarkup(paragraph.substring(open)))
+            break
+        }
+        text.append(paragraph, index, open)
+        val inner = paragraph.substring(openEnd + 1, close)
+        val rt = rtTag.find(inner)
+        val rtEnd = if (rt == null) -1 else inner.indexOf("</rt", rt.range.last + 1, ignoreCase = true)
+        val start = text.length
+        text.append(plainMarkup(if (rt == null) inner else inner.substring(0, rt.range.first)))
+        val reading = if (rt != null && rtEnd >= 0) plainMarkup(inner.substring(rt.range.last + 1, rtEnd)) else ""
+        if (reading.isNotEmpty() && text.length > start) readings += Reading(reading, start, text.length)
+        index = closeEnd + 1
+    }
+    return text.toString() to readings
+}
+
+/** A base or a reading as it reads without its markup; the rp fallback is markup too. */
+private fun plainMarkup(markup: String) = markup.replace(rpBlock, "").replace(anyTag, "").trim()
+
+/** A heading is drawn as one line, so an annotation there only leaves its base text behind. */
+private fun String.withoutReadings() = replace(rtBlock, "").replace(rpBlock, "").replace(rubyWrapper, "")
+
+/** A reading the markup asks to draw above [start]..[end] of the paragraph's plain text. */
+private class Reading(val text: String, val start: Int, val end: Int)
+
+private val rtTag = Regex("<rt[^>]*>", RegexOption.IGNORE_CASE)
+private val rpBlock = Regex("<rp[^>]*>[^<]*</rp[^>]*>", RegexOption.IGNORE_CASE)
+private val rtBlock = Regex("<rt[^>]*>[^<]*</rt[^>]*>", RegexOption.IGNORE_CASE)
+private val rubyWrapper = Regex("</?ruby[^>]*>", RegexOption.IGNORE_CASE)
+private val anyTag = Regex("<[^>]*>")
+
 /** A run of paragraphs or an illustration, with the room it takes on the page. */
 private sealed interface Panel {
     val height: Int
 
     /**
      * A run of paragraphs, each laid out on its own. Every paragraph is given a line and the blank
-     * line below it; a paragraph that wraps asks for one more line step per line it adds.
+     * line below it; a paragraph that wraps asks for one more line step per line it adds, and one
+     * that carries a reading asks for the room above the line it marks.
      */
-    class Paragraphs(val text: String, val layout: StaticLayout, val firstBaseline: Float, override val height: Int) : Panel
+    class Paragraphs(
+        val text: String,
+        val layout: StaticLayout,
+        val baselines: FloatArray,
+        val rubies: List<DrawRuby>,
+        override val height: Int,
+    ) : Panel
 
     class Figure(val url: String, override val height: Int) : Panel
 }
+
+/** A reading drawn above [from]..[to] of one line, in page coordinates. */
+private class DrawRuby(val text: String, val line: Int, val from: Float, val to: Float)
 
 /** The width every page image is rendered at, and the clearance the reader gets on both sides. */
 private const val WIDTH = 1000
@@ -717,6 +819,11 @@ private const val LINE_SPACING_EXTRA = 6f
 
 /** Extra space between two lines of the same paragraph, and between two paragraphs. */
 private const val PARAGRAPH_GAP = 25
+
+/** The reading of a ruby: half the body size, with the room and the gap the app draws it at. */
+private const val RUBY_SCALE = 0.5f
+private const val RUBY_HEADROOM_RATIO = 0.12f
+private const val RUBY_GAP_RATIO = 0.04f
 
 /** A page carries its text in its URL: URL-safe base64 keeps it one path segment. */
 private fun String.encode() = Base64.encodeToString(toByteArray(), Base64.NO_WRAP or Base64.URL_SAFE)

@@ -25,6 +25,8 @@ import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.Response
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
+import org.jsoup.nodes.Node
+import org.jsoup.nodes.TextNode
 import org.jsoup.select.Elements
 import java.text.SimpleDateFormat
 import java.util.Locale
@@ -219,7 +221,8 @@ internal class BiliNovelWeb(private val source: BiliNovel) {
     }
 
     private fun chapterTitle(doc: Document): String {
-        val html = doc.selectFirst("#atitle")?.html() ?: return ""
+        // A heading is drawn as one line, so an annotation only leaves its base text behind.
+        val html = doc.selectFirst("#atitle")?.clone()?.also { it.select("rt, rp").remove() }?.html() ?: return ""
         if (html.indexOf('/') >= 0) return ""
         return android.text.Html.fromHtml(html, android.text.Html.FROM_HTML_MODE_LEGACY).toString().trim()
     }
@@ -241,7 +244,7 @@ internal class BiliNovelWeb(private val source: BiliNovel) {
         val blocks = mutableListOf<Block>()
         nodes.map { node -> if (node.tagName() == "p") scrambled[next++]!! else node }.forEach { node ->
             if (node.tagName() == "p") {
-                NEWLINE_REGEX.replace(node.wholeText(), "\n").trim().takeIf(String::isNotBlank)?.let { blocks.add(Block.Text(it)) }
+                NEWLINE_REGEX.replace(node.withRuby(), "\n").trim().takeIf(String::isNotBlank)?.let { blocks.add(Block.Text(it)) }
                 return@forEach
             }
             node.select("img").mapNotNull { it.imageUrl() }.forEach { blocks.add(Block.Image(it)) }
@@ -254,6 +257,36 @@ internal class BiliNovelWeb(private val source: BiliNovel) {
                 }
             }
         }
+    }
+
+    /**
+     * The paragraph's text with each annotation left as the markup the renderer draws above the
+     * base text; everything else is text, because the site's mobile page carries nothing fancier
+     * inside a paragraph that the reader shows.
+     */
+    private fun Element.withRuby(): String {
+        val builder = StringBuilder()
+        fun walk(node: Node) {
+            when (node) {
+                is TextNode -> builder.append(node.text())
+                is Element -> when (node.tagName()) {
+                    "br" -> builder.append('\n')
+                    "rt", "rp", "img" -> Unit
+                    "ruby" -> builder.append(rubyMarkup(node))
+                    else -> node.childNodes().forEach(::walk)
+                }
+
+                else -> Unit
+            }
+        }
+        childNodes().forEach(::walk)
+        return builder.toString()
+    }
+
+    private fun rubyMarkup(ruby: Element): String {
+        val base = ruby.clone().also { it.select("rt, rp").remove() }.text()
+        val reading = ruby.selectFirst("rt")?.text().orEmpty()
+        return if (base.isNotBlank() && reading.isNotBlank()) "<ruby>$base<rt>$reading</rt></ruby>" else base
     }
 
     private fun paragraphOrder(size: Int, chapterId: Int, salt: Pair<Int, Int>): List<Int> {
